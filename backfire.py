@@ -11,6 +11,7 @@ class Environment:
     def __init__(self, md=".", out_dir=".", conf_dir="."):
         self.md = md
         self.out_dir = out_dir
+        os.makedirs(out_dir, exist_ok = True)
         self.conf_dir = conf_dir
 
     def load_ohlcv(self, ticker, from_date, to_date=None):
@@ -37,7 +38,10 @@ class Environment:
 
 class Signal:
     """
-       Represents a signal (e.g., entry signal)
+       Represents a signal (e.g., entry signal).
+
+           The signal is evaluated at the end of the day using the C(losing) price of the day.
+           The signal value is then set True for that day.
     """
     def __init__(self, name):
         self._name = name
@@ -50,7 +54,7 @@ class Signal:
         """
            Generates signal values.
         :param ohlcv: Dataframe with columns 'O', 'H', 'L', 'C', 'V' and indexed with day dates.
-        :return: Dataframe with column 'es' and indexed with day dates
+        :return: Dataframe with column 'es' (and iny intermediate columens) and indexed with day dates
         """
         pass
 
@@ -58,8 +62,8 @@ class RandomEntrySignal(Signal):
     """
        Random entry. Useful for testing.
     """
-    def __init__(self, name, prob=0.2):
-        super().__init__(name)
+    def __init__(self, prob=0.2):
+        super().__init__(f"randomentry{prob:.1f}")
         """
            Creates a random entry signal every 1/prob days
         """
@@ -71,14 +75,50 @@ class RandomEntrySignal(Signal):
         rv.rename('es', inplace=True)
         return rv
 
+class FlatBaseSignal(Signal):
+    """
+        Breakout from a flat base.
+    """
+    def __init__(self, length_periods=4*5, height=.1):
+        self.length = length_periods
+        self.height = height
+        super().__init__(f"flatbase{length_periods}_{height:.2f}")
+
+    def __call__(self, ohlcv):
+        ohlcv['shifted'] = ohlcv.C.shift(1)
+        ohlcv['low'] = ohlcv.C.shift(1).rolling(self.length).min()
+        ohlcv['high'] = ohlcv.C.shift(1).rolling(self.length).max()
+        ohlcv['fb'] = ((ohlcv.high - ohlcv.low)) / ohlcv.low < self.height
+
+        # thrust breakout:
+        ohlcv['range'] = ohlcv.H - ohlcv.L
+        ohlcv['avg_range'] = ohlcv['range'].shift(1).rolling(self.length).mean()
+        ohlcv['range_greater'] = ohlcv['range'] > ohlcv.avg_range
+        ohlcv['vol_higher'] = ohlcv.V > ohlcv.V.shift(1)
+        ohlcv['close_upper_third'] = ohlcv.C - ohlcv.L > (ohlcv.H - ohlcv.L) * 0.66
+        ohlcv['thrust_breakout'] = ohlcv.range_greater & ohlcv.vol_higher & ohlcv.close_upper_third
+
+        ohlcv['flat_base_breakout'] = ohlcv.fb & ohlcv.thrust_breakout
+        rv = ohlcv.flat_base_breakout
+        rv.rename('es', inplace=True)
+
+        return rv
+
 class Strategy:
     """
-        Represents a strategy.
+        A trading strategy.
+
+
     """
-    def __init__(self, sl=0.07, tp=0.2, pos=100):
+    def __init__(self, name="SignalDrivenStrategy", sl=0.07, tp=0.2, pos=100):
         self._sl = sl
         self._tp = tp
         self._pos = pos
+        self._name = f"{name}_sl={sl}_tp={tp}"
+
+    @property
+    def name(self):
+        return self._name
 
     @property
     def sl(self):
@@ -170,7 +210,16 @@ class Runner:
         d = pd.concat([ohlcv, signal_values], axis=1)
         d = self._run(d)
         price_and_signal = self._make_price_and_signal(d)
+        price_and_signal.to_csv(os.path.join(self.env.out_dir, f"pas_{ticker}_{self.signal.name}.csv"),
+                               index=True, header=True)
+
         trades = self._make_trades(ticker, d)
+        stats, trades = Evaluator().evaluate_trades(trades)
+        stats.to_csv(os.path.join(self.env.out_dir, f"stats_{ticker}_{self.signal.name}_{self.strategy.name}.csv"),
+                     header=False, index=True)
+        trades.to_csv(os.path.join(self.env.out_dir, f"trades_{ticker}_{self.signal.name}_{self.strategy.name}.csv"),
+                     header=True, index=True)
+
         return trades, price_and_signal
 
 class Evaluator:
