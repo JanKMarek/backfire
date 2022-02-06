@@ -218,10 +218,20 @@ class SignalDrivenStrategy:
     """
         A signal driven strategy.
 
-           The strategy simulates execution of trades in the morning. If the signal was triggered
-        the previous day, the strategy will take position by buying at the opening price. If stoploss
-        or takeprofit are triggered (i.e., previous day clos is below/above sl/tp_, the position
-        is flattened by selling at the open as well. The position is updated for that day accordingly.
+        This strategy enters positions when the signal triggers. The position is closed when
+        one of the following occurs:
+            1. Signal goes off.
+            2. Stoploss is hit. Stoploss cool-off period is supported.
+            3.
+
+
+        The backtest simulates a trader who calculates signals and trading actions in the evening and
+            then executes the trades at the next day's open. The backtest function executes the following
+            for each ohlcv row:
+            1. Calculate position management related fields (pos, sl, tp, etc). Can only use the opening
+               price from the current day and any previous days' values.
+            2. Calculate signal values (es) - can use all OHLCV fields.
+            3. Calculate the action for the next day (buy, sl, so, tp, etc). CAn use all OHLCV fields.
     """
     def __init__(self, env, signal, sl=0.07, tp=0.2, pos_management='fixed', initial_pos=100000):
         self._env = env
@@ -252,62 +262,103 @@ class SignalDrivenStrategy:
 
         """
         d = pd.concat([ohlcv, signal_values], axis=1)
-        for colname in ['pos', 'sl', 'tp', 'memo']:
+        for colname in ['pos', 'sl', 'tp', 'action', 'memo']:
             d[colname] = np.nan
 
         # first row:
         d.loc[d.index[0], 'pos'] = 0
         d.loc[d.index[0], 'sl'] = np.nan
         d.loc[d.index[0], 'tp'] = np.nan
-        d.loc[d.index[0], 'memo'] = 'buy' if d.loc[d.index[0], 'es'] else np.nan
+        d.loc[d.index[0], 'action'] = 'buy' if d.loc[d.index[0], 'es'] else np.nan
+        d.loc[d.index[0], 'memo'] = 'bought' if d.loc[d.index[0], 'es'] else np.nan
 
         # process all other rows except for the last one
         for i in range(1, len(d)-1):
             this_row = d.index[i]
             prev_row = d.index[i-1]
 
+            # morning pass - set position based on prev day's position and prev day's action flag
+
             # sell because of flag from prev day
-            if d.loc[prev_row, 'pos'] != 0 and d.loc[prev_row, 'memo'] in ['sl', 'tp', 'so']:
+            if d.loc[prev_row, 'pos'] != 0 and d.loc[prev_row, 'action'] in ['sl', 'tp', 'so']:
                 d.loc[this_row, 'pos'] = 0
                 d.loc[this_row, 'sl'] = np.nan
                 d.loc[this_row, 'tp'] = np.nan
-                d.loc[this_row, 'memo'] = f"sold-{d.loc[prev_row, 'memo']}"
-            # buy becaue of flag from prev day
-            elif d.loc[prev_row, 'pos'] == 0 and d.loc[prev_row, 'memo'] == 'buy':
+                d.loc[this_row, 'memo'] = f"sold-{d.loc[prev_row, 'action']}"
+            # buy because of flag from prev day
+            elif d.loc[prev_row, 'pos'] == 0 and d.loc[prev_row, 'action'] == 'buy':
                 d.loc[this_row, 'pos'] = self.pos / d.loc[this_row, 'O']
                 d.loc[this_row, 'sl'] = round((1-self.sl) * d.loc[this_row, 'O'])
                 d.loc[this_row, 'tp'] = round((1+self.tp) * d.loc[this_row, 'O'])
                 d.loc[this_row, 'memo'] = f"bought-{self._signal.name}"
-            # previous position is flat and signal triggered -> set action to buy next day
-            elif d.loc[prev_row, 'pos'] == 0 and d.loc[this_row, 'es']:
-                d.loc[this_row, 'pos'] = 0
-                d.loc[this_row, 'sl'] = np.nan
-                d.loc[this_row, 'tp'] = np.nan
-                d.loc[this_row, 'memo'] = 'buy'
-            # have position and stoploss triggered  - set action to sell next day
-            elif d.loc[prev_row, 'pos'] != 0 and d.loc[this_row, 'C'] <= d.loc[prev_row, 'sl']:
-                d.loc[this_row, 'pos'] = d.loc[prev_row, 'pos']
-                d.loc[this_row, 'sl'] = d.loc[prev_row, 'sl']
-                d.loc[this_row, 'tp'] = d.loc[prev_row, 'tp']
-                d.loc[this_row, 'memo'] = 'sl'
-            # have position and takeprofit triggered - set action to sell next day
-            elif d.loc[prev_row, 'pos'] != 0 and d.loc[this_row, 'C'] >= d.loc[prev_row, 'tp']:
-                d.loc[this_row, 'pos'] = d.loc[prev_row, 'pos']
-                d.loc[this_row, 'sl'] = d.loc[prev_row, 'sl']
-                d.loc[this_row, 'tp'] = d.loc[prev_row, 'tp']
-                d.loc[this_row, 'memo'] = 'tp'
-            # have position and signal went off - set action to sell next day
-            elif d.loc[prev_row, 'pos'] != 0 and not d.loc[this_row, 'es']:
-                d.loc[this_row, 'pos'] = d.loc[prev_row, 'pos']
-                d.loc[this_row, 'sl'] = d.loc[prev_row, 'sl']
-                d.loc[this_row, 'tp'] = d.loc[prev_row, 'tp']
-                d.loc[this_row, 'memo'] = 'so'
-            # else just carry over values
+            # else carry over positions
             else:
                 d.loc[this_row, 'pos'] = d.loc[prev_row, 'pos']
                 d.loc[this_row, 'sl'] = d.loc[prev_row, 'sl']
                 d.loc[this_row, 'tp'] = d.loc[prev_row, 'tp']
                 d.loc[this_row, 'memo'] = np.nan
+
+            # evening pass - set action flag for next day based on today's position and signal
+
+            # position is flat and signal triggered -> set action to buy next day
+            if d.loc[this_row, 'pos'] == 0 and d.loc[this_row, 'es']:
+                d.loc[this_row, 'action'] = 'buy'
+            # have position and stoploss triggered  - set action to sell next day
+            elif d.loc[this_row, 'pos'] != 0 and d.loc[this_row, 'C'] <= d.loc[prev_row, 'sl']:
+                d.loc[this_row, 'action'] = 'sl'
+            # have position and takeprofit triggered - set action to sell next day
+            elif d.loc[this_row, 'pos'] != 0 and d.loc[this_row, 'C'] >= d.loc[prev_row, 'tp']:
+                d.loc[this_row, 'action'] = 'tp'
+            # have position and signal went off - set action to sell next day
+            elif d.loc[this_row, 'pos'] != 0 and not d.loc[this_row, 'es']:
+                d.loc[this_row, 'action'] = 'so'
+            # else no action flag for tomorrow
+            else:
+                d.loc[this_row, 'action'] = np.nan
+
+            #
+            # # sell because of flag from prev day
+            # if d.loc[prev_row, 'pos'] != 0 and d.loc[prev_row, 'memo'] in ['sl', 'tp', 'so']:
+            #     d.loc[this_row, 'pos'] = 0
+            #     d.loc[this_row, 'sl'] = np.nan
+            #     d.loc[this_row, 'tp'] = np.nan
+            #     d.loc[this_row, 'memo'] = f"sold-{d.loc[prev_row, 'memo']}"
+            # # buy becaue of flag from prev day
+            # elif d.loc[prev_row, 'pos'] == 0 and d.loc[prev_row, 'memo'] == 'buy':
+            #     d.loc[this_row, 'pos'] = self.pos / d.loc[this_row, 'O']
+            #     d.loc[this_row, 'sl'] = round((1-self.sl) * d.loc[this_row, 'O'])
+            #     d.loc[this_row, 'tp'] = round((1+self.tp) * d.loc[this_row, 'O'])
+            #     d.loc[this_row, 'memo'] = f"bought-{self._signal.name}"
+            # # previous position is flat and signal triggered -> set action to buy next day
+            # elif d.loc[prev_row, 'pos'] == 0 and d.loc[this_row, 'es']:
+            #     d.loc[this_row, 'pos'] = 0
+            #     d.loc[this_row, 'sl'] = np.nan
+            #     d.loc[this_row, 'tp'] = np.nan
+            #     d.loc[this_row, 'memo'] = 'buy'
+            # # have position and stoploss triggered  - set action to sell next day
+            # elif d.loc[prev_row, 'pos'] != 0 and d.loc[this_row, 'C'] <= d.loc[prev_row, 'sl']:
+            #     d.loc[this_row, 'pos'] = d.loc[prev_row, 'pos']
+            #     d.loc[this_row, 'sl'] = d.loc[prev_row, 'sl']
+            #     d.loc[this_row, 'tp'] = d.loc[prev_row, 'tp']
+            #     d.loc[this_row, 'memo'] = 'sl'
+            # # have position and takeprofit triggered - set action to sell next day
+            # elif d.loc[prev_row, 'pos'] != 0 and d.loc[this_row, 'C'] >= d.loc[prev_row, 'tp']:
+            #     d.loc[this_row, 'pos'] = d.loc[prev_row, 'pos']
+            #     d.loc[this_row, 'sl'] = d.loc[prev_row, 'sl']
+            #     d.loc[this_row, 'tp'] = d.loc[prev_row, 'tp']
+            #     d.loc[this_row, 'memo'] = 'tp'
+            # # have position and signal went off - set action to sell next day
+            # elif d.loc[prev_row, 'pos'] != 0 and not d.loc[this_row, 'es']:
+            #     d.loc[this_row, 'pos'] = d.loc[prev_row, 'pos']
+            #     d.loc[this_row, 'sl'] = d.loc[prev_row, 'sl']
+            #     d.loc[this_row, 'tp'] = d.loc[prev_row, 'tp']
+            #     d.loc[this_row, 'memo'] = 'so'
+            # # else just carry over values
+            # else:
+            #     d.loc[this_row, 'pos'] = d.loc[prev_row, 'pos']
+            #     d.loc[this_row, 'sl'] = d.loc[prev_row, 'sl']
+            #     d.loc[this_row, 'tp'] = d.loc[prev_row, 'tp']
+            #     d.loc[this_row, 'memo'] = np.nan
 
         # last row
         prev_row = d.index[-2]
@@ -373,10 +424,9 @@ class SignalDrivenStrategy:
         positions = self._run(ohlcv, signal_values)
 
         trades = self._make_trades(ticker, ohlcv, positions)
+        positions = pd.concat([price_and_signal, positions], axis=1)
 
         stats, trades = Evaluator().evaluate_trades(trades, self._pos, from_date, to_date)
-
-        positions = pd.concat([price_and_signal, positions], axis=1)
 
         positions.to_csv(os.path.join(self._env.out_dir, f"pos_{ticker}_{self.name}.csv"),
                                index=True, header=True, float_format='%.2f')
