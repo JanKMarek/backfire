@@ -51,5 +51,11 @@ To-do list:
 - code Minervini's Stage2, VCP and Minervini breakout, Violations exit strategies
 - backtest Minervini's strategies
 
+## Issues
+- SDS: when an entry signal is used in conjunction with risk management, risk mgmt may stop a position out yet 
+  reenter on the next day since the entry signal is still in force. 
+- Add Nasdaq data on the secondary axis for relative strength calculations? 
+- relative strenth - w.r.t nasdaq
+
 
 

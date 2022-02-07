@@ -324,9 +324,9 @@ class SignalDrivenStrategy(StrategyInterface):
                  name=None):
         self._env = env
         self.entry_signal = entry_signal
-        self.exit_signal = exit_signal
-        self.risk_management = risk_management
-        self.position_management=position_management
+        self.exit_signal=AlwaysOffSignal() if exit_signal is None else exit_signal
+        self.risk_management = OpenProtectiveStop() if risk_management is None else risk_management
+        self.position_management = PositionManagement() if position_management is None else position_management
         if name is None:
             self._name = (f"SDS_" +
                           f"entry_signal={self.entry_signal.name}_" +
@@ -512,13 +512,13 @@ class Evaluator:
         stats['no_winning_trades'] = len(trades[trades.pnl >= 0])
         stats['no_losing_trades'] = len(trades[trades.pnl < 0])
         stats['win/loss ratio'] = round(stats["no_winning_trades"] / stats["no_trades"], 2)
-        stats['avg_pnl_pcnt'] = round(trades.pnl_pcnt.mean(), 2)
+        stats['EV'] = round(trades.pnl_pcnt.mean(), 2)
         stats['avg_winning_pnl_pcnt'] = round(trades[trades.pnl >= 0].pnl_pcnt.mean(), 2)
         stats['avg_losing_pnl_pcnt'] = round(trades[trades.pnl < 0].pnl_pcnt.mean(), 2)
-        stats['r'] = stats.avg_winning_pnl_pcnt / stats.avg_losing_pnl_pcnt
+        stats['r'] = stats['avg_winning_pnl_pcnt'] / abs(stats['avg_losing_pnl_pcnt'])
         stats['min_pnl_pcnt'] = round(trades.pnl_pcnt.min(), 2)
         stats['max_pnl_pcnt'] = round(trades.pnl_pcnt.max(), 2)
-        stats['std_pnl_pcnt'] = round(trades.pnl_pcnt.std(), 2)
+#        stats['std_pnl_pcnt'] = round(trades.pnl_pcnt.std(), 2)
         stats['avg_hp'] = trades.hp.mean()
         stats['avg_winning_hp'] = trades[trades.pnl >= 0].hp.mean()
         stats['avg_losing_hp'] = trades[trades.pnl < 0].hp.mean()
