@@ -7,7 +7,10 @@ import pandas_datareader as pdr
 
 class Environment:
     """
-      Represents the backtesting environment
+      Represents the backtesting environment:
+        - md - directory with market data
+        - out_dir - output directory
+        - conf_dir - configuration directory
     """
     def __init__(self, md=".", out_dir=".", conf_dir="."):
         self.md = md
@@ -50,14 +53,23 @@ class Signal:
        Represents a signal (e.g., entry signal).
 
            The signal is evaluated at the end of the day using the C(losing) price of the day.
-           The signal value is then set True for that day.
+           
     """
-    def __init__(self, name):
+    def __init__(self, name, env=None):
         self._name = name
+        self.env = env
 
     @property
     def name(self):
         return self._name
+
+    @property
+    def env(self):
+        return self._env
+
+    @env.setter
+    def env(self, value):
+        self._env = value
 
     def ma(self, ohlcv, per):
         if per == 200:
@@ -78,7 +90,7 @@ class Signal:
         """
            Generates signal values.
         :param ohlcv: Dataframe with columns 'O', 'H', 'L', 'C', 'V' and indexed with day dates.
-        :return: Dataframe with column 'es' (and any intermediate columns) and indexed with day dates
+        :return: Dataframe with column 'es' (and possibly intermediate columns) and indexed with day dates
         """
         pass
 
@@ -256,9 +268,10 @@ class NoRiskManagement(OpenProtectiveStop):
         return "NoRiskManagement"
 
 class PositionManagement():
-    def __init__(self, policy="fixed_amount", initial_position=100000):
+    def __init__(self, policy="fixed_amount", initial_position=100000, fraction=1.0):
         self.policy = policy
         self.initial_position = initial_position
+        self.fraction = fraction
 
     @property
     def name(self):
@@ -267,6 +280,8 @@ class PositionManagement():
     def pos(self, cash):
         if self.policy == "fixed_amount":
             return self.initial_position
+        elif self.policy == "fixed_fraction":
+            return cash * self.fraction
         else:
             raise ValueError(f"Position management policy {self.policy} not implemented.")
 
@@ -343,8 +358,14 @@ class SignalDrivenStrategy(StrategyInterface):
     def _run(self, pas):
         """
             Computes position information.
-              Input: dataframe with OHLCV and entry/exit signals.
-              Output: adds columns 'pos', 'cash', 'memo' with shares, cash and memos
+              Input: dataframe with OHLCV and entry/exit signals. These are values at the end of the day.
+              Output: adds columns 'pos', 'cash', 'memo' with shares, cash and memos.
+                  action - action to execute the next morning: es, xs and risk mgmt signals sl, pc, tp
+                  pos - position at the end of the day, after the morning actions were executed
+                  cash - dtto
+                  memo - action plus signal name
+                  buy_price - price at which the current position was bought
+
         """
         # position management fields
         pas['pos'] = 0 # number of shares
@@ -484,7 +505,9 @@ class SignalDrivenStrategy(StrategyInterface):
 
         trades = self._make_trades(ticker, positions)
 
-        stats, trades = Evaluator().evaluate_trades(trades, self.position_management.initial_position,
+        stats, trades = Evaluator().evaluate_trades(trades,
+                                                    positions,
+                                                    self.position_management.initial_position,
                                                     from_date, to_date)
 
         positions.to_csv(os.path.join(self._env.out_dir, f"pos_{ticker}_{self.name}.csv"),
@@ -502,7 +525,7 @@ class Evaluator:
                entry_date, shares, entry_price, exit_date, exit_price
     """
 
-    def evaluate_trades(self, trades, initial_position, from_date, to_date):
+    def evaluate_trades(self, trades, positions, initial_position, from_date, to_date):
         trades['pnl'] = trades.shares * (trades.exit_price - trades.entry_price)
         trades['pnl_pcnt'] = trades.pnl / (trades.shares * trades.entry_price)
         trades['hp'] = trades.exit_date - trades.entry_date
@@ -528,6 +551,22 @@ class Evaluator:
         tim = to_date - from_date
         stats["time_span"] = tim
         stats['cagr'] = math.pow(rtn, 365 / tim.days) - 1
+
+        # Max Drawdown - Realized
+        equity = trades.pnl.cumsum().to_frame()
+        equity.columns = ['cum_pnl']
+        equity['equity'] = initial_position + equity.cum_pnl
+        equity['CumMax'] = equity.equity.cummax()
+        equity['dd'] = equity.CumMax - equity.equity
+        equity['dd_pcnt'] = equity.dd / equity.CumMax
+        stats['max_dd_pcnt_realized'] = equity.dd_pcnt.max()
+
+        # Max Drawdown - Unrealized
+        positions['balance'] = positions.cash + positions.pos * positions.C
+        positions['unrealized_CumMax'] = positions.balance.cummax()
+        positions['unrealized_dd'] = positions.unrealized_CumMax - positions.balance
+        positions['unrealized_dd_pcnt'] = positions.unrealized_dd / positions.unrealized_CumMax
+        stats['max_dd_pcnt_unrealized'] = positions.unrealized_dd_pcnt.max()
 
         stats = pd.Series(name="stats", data=stats)
         return stats, trades
