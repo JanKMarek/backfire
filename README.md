@@ -1,29 +1,46 @@
 # Backfire 
 
-## Introduction
+# Nov 22, 2022
+Use Cases: 
+- Utilities for market data maintenance. This includes 'backfire.py get AAPL' and 'backfire.py update_all'.  
+- Signal visualization. Visualize signals such as Pocket Pivot, Buyable Gap Up, Distribution Days, Follow-thru Day etc. 
+  This will include coding up a subclass of Signal. The Signal is an object returning id (sequential id) and value (-1 .. 1). 
+  Signals are visualized by running the VisualizeSignal notebook - the notebook will graph out the signal along with the underlying.  
 
 
-I want to gain a deeper understanding of growth-oriented stock trading strategies - strategies where we identify stocks most
-likely to grow over the next few months, enter them before they get overextended and sell them before 
-they crash. I want to research how to identify such companies (by a combination of fundamental and technical factors), 
-when to enter them and when to exit them. 
-   
-Several such strategies are described in books by Zweig, O'Neil, Minervini, Boucher and others - they tend to select
-stocks based on relative strength, developing uptrend and fundamental growth factors (e.g., accelerating earnings growth). 
-The entry and exit points are then driven by technical factors - enter on breakout from consolidation, sell on signs of weakness 
-or overextension. These strategies then differ in the entry signals used and in the size of the uptrends they attempt 
-to capture. 
+# Nov 7, 2022
+Three work items: 
+- don't enter the signal once it has been stopped out.
+- make sure exit and risk mgmt signals override the entry signal
+- implement partial positions based on strength of signal
 
-I want to have my own backtest tools which will allow me to decide on questions such as: 
+## Motivation
+
+One approach to investing in growth stocks is to identify stocks most likely to go up, buy them as they are beginning
+their run and before they get overextended, and then sell them into strength or on the growth dissipating. Such 
+strategies generally work best in market uptrends. 
+
+Several such strategies are described in books by Zweig, O'Neil, Weinstein, Minervini, Boucher and others - they select
+stocks based on the combination of price and volume action (breaking out into an uptrend) and fundamental growth factors 
+(e.g., accelerating growth). The entry and exit points are then driven by technical factors - enter on breakout from 
+consolidation or other technical setups, sell on signs of weakness or overextension.
+
+These strategies rely on a market indicator which detects the state of the market (uptrend, downtrend, rangebound). These
+indicators are based on price and volume of the market action. The strategies are generally fully invested in uptrends 
+and in cash during downtrends. 
+
+I want to be able to backtest the performance of these strategies in different market periods.  
+
+Backfire is a backtesting framework which will help me answwer the following questions:  
 - do the signals and strategies described in the above books really work when backtested in realistic scenarios? 
 - is it better to concentrate on shorter runups and trade more frequently (Minervini-style) or on larger runups
     and hold for longer periods of time (CANSLIM-style)? 
 - what happens if I vary strategy parameters (e.g., take profit threshold, signal parameters)? What set of 
     parameters is compatible with CIBC 15 day mandatory holding period?
-        
-Once I identify strategies and parameters that would work (i.e., have desired risk, reward and are compatible with
-with CIBC code of conduct), I would like to have a screening tool which would, on a weekly basis, allow me to identify stocks 
-as they become candidates for entry and exit.  
+- how do different market indicators perform? 
+
+Aspirationally, I find the best indicators and parameters, I would like to have a screening tool which would, 
+on a weekly basis, allow me to identify stocks as they become candidates for entry and exit.  
 
 The goal would be: 
     - code up a backtesting framework simulating a real-life strategy (daily data, exit as per books)
@@ -33,14 +50,48 @@ The goal would be:
 
 ## Description
 
-Backfire is a stock trading strategy backtesting framework. The framework simulates a trader who uses daily data and 
-looks at the markets twice - in the evening, the trader evaluates the market situation and decides on the trading 
-actions next day, and then executes the tradign actinos next morning at the opening prices.
+Backfire is a stock trading strategy backtesting framework. The framework simulates actions of a trader who uses daily data and 
+looks at the markets twice: in the evening, the trader evaluates the market situation and decides on the trading 
+actions next day, and then executes the trading actions next morning at the opening prices.
 
 The simulated trading strategy uses two signals - entry and exit signals - and supports configurable risk management 
-and position management logic. The strategy enters a position whenever the entry signal is triggered 
-and exits the position whenever either the exit or the risk management signals are triggered. The strategy generates 
-data for visualization of its behaviour and signals, as well as the set of trades and trading performance statistic. 
+and position management logic. The strategy enters a position whenever the entry signal is triggered (signal is evaluated 
+at the end of the day, trading action is executed the next morning at the opening prices) and exits the position whenever 
+either the exit or the risk management signals are triggered (again, both exit and risk management signals are 
+evaluated at the end of the day and sell actions are executed the next morning). The strategy generates 
+data for visualization of its behaviour and signals, as well as the set of trades and trading performance statistic.
+
+## Supported Scenarios
+
+Strategy has: 
+- entry signal (evaluated at end of day)
+- exit signal (evaluated at end of day) 
+- risk management (exit position due to loss exceeding stop loss)
+- position management (fixed amount, fixed proportion) 
+- market situation overlay 
+
+Strategy can handle the following scenarios: 
+- O'Neill CANSLIM trade with simple entry/exit. Entry on pattern (entry signal fires once) but only when the market is on (overlay stays on and off, so 
+  need index data as well), exit on one of o/e or weakness (exit signal fires once). Risk mgmt fires on loss > 7% (fires once). 
+  If risk mgmt and entry clash, entry wins. 
+- Buy and Hold a ticker. entry=AlwaysOn or a signal that fires one, exit=AlwaysOff, rm=None, pos_mgmt=fixed_amount, overlay=None
+- Hold Index with Risk Overlay. 
+- Buy/Sell based on a single signal. 
+- Buy/Sell based on a single signal, with risk management overlay. 
+- ONeil with pyramiding.   
+- Minervini trade. Splitting exits, 
+- 
+
+And so: 
+- Entry signal that can fire once
+- 
+
+
+
+
+
+Statistics: cagr, max DD, p, avgW, avgL, avgHpW, avgHpL, #trades
+Visualization: equity curve (with underlying), trade histogram, time chart of entry and exit sigansl (with underlying) 
 
 ## Worklist
 
@@ -56,6 +107,9 @@ To-do list:
   reenter on the next day since the entry signal is still in force. 
 - Add Nasdaq data on the secondary axis for relative strength calculations? 
 - relative strenth - w.r.t nasdaq
+
+## Miscellaneous
+- run jupyter notebook in conda environment 'investing'
 
 
 

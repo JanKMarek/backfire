@@ -53,7 +53,7 @@ class Signal:
        Represents a signal (e.g., entry signal).
 
            The signal is evaluated at the end of the day using the C(losing) price of the day.
-           
+
     """
     def __init__(self, name, env=None):
         self._name = name
@@ -334,13 +334,13 @@ class SignalDrivenStrategy(StrategyInterface):
     """
     def __init__(self, env, entry_signal,
                  exit_signal=AlwaysOffSignal(),
-                 risk_management=OpenProtectiveStop(),
+                 risk_management=NoRiskManagement(),
                  position_management=PositionManagement(),
                  name=None):
         self._env = env
         self.entry_signal = entry_signal
         self.exit_signal=AlwaysOffSignal() if exit_signal is None else exit_signal
-        self.risk_management = OpenProtectiveStop() if risk_management is None else risk_management
+        self.risk_management = NoRiskManagement() if risk_management is None else risk_management
         self.position_management = PositionManagement() if position_management is None else position_management
         if name is None:
             self._name = (f"SDS_" +
@@ -361,7 +361,7 @@ class SignalDrivenStrategy(StrategyInterface):
               Input: dataframe with OHLCV and entry/exit signals. These are values at the end of the day.
               Output: adds columns 'pos', 'cash', 'memo' with shares, cash and memos.
                   action - action to execute the next morning: es, xs and risk mgmt signals sl, pc, tp
-                  pos - position at the end of the day, after the morning actions were executed
+                  pos - position (# of shares) at the end of the day, after the morning actions were executed
                   cash - dtto
                   memo - action plus signal name
                   buy_price - price at which the current position was bought
@@ -517,7 +517,7 @@ class SignalDrivenStrategy(StrategyInterface):
         trades.to_csv(os.path.join(self._env.out_dir, f"trades_{ticker}_{self.name}.csv"),
                      header=True, index=True, float_format='%.2f')
 
-        return price_and_signals, positions, trades
+        return price_and_signals, positions, trades, stats
 
 class Evaluator:
     """
@@ -529,6 +529,7 @@ class Evaluator:
         trades['pnl'] = trades.shares * (trades.exit_price - trades.entry_price)
         trades['pnl_pcnt'] = trades.pnl / (trades.shares * trades.entry_price)
         trades['hp'] = trades.exit_date - trades.entry_date
+        trades['hp'] = trades.hp.apply(lambda x: x.days)
 
         stats = {}
         stats['no_trades'] = len(trades)
@@ -570,5 +571,67 @@ class Evaluator:
 
         stats = pd.Series(name="stats", data=stats)
         return stats, trades
+
+if __name__ == "__main__":
+    import os
+    from datetime import datetime
+    import pandas as pd
+    import numpy as np
+
+
+
+
+    short_MA = 2 # days
+    long_MA = 30 * 5 # days
+
+    ticker = 'QQQ' # '^IXIC_1990'
+    name = f"Index_{str(short_MA)}dMAvs{str(long_MA)}dMA"
+    from_date = '2000-01-01' # '2013-03-01' # '1999-06-01' # "1990-01-01"
+    #dir_name = f"out_index_buy_hold_{str(short_MA)}MAvs{str(long_MA)}MA"
+    out_dir = f"out_index_vs_longMA"
+
+
+    env = Environment(md=r"../md/daily", out_dir=out_dir)
+
+    class ShortMAAboveLongMA(Signal):
+        def __init__(self, short_MA, long_MA):
+            super().__init__(f"{str(short_MA)}dMAAbove{str(long_MA)}MA", env)
+
+        def __call__(self, ohlcv):
+            ohlcv['ma' + str(long_MA)] = self.ma(ohlcv, long_MA)
+            ohlcv['ma' + str(short_MA)] = self.ma(ohlcv, short_MA)
+            ohlcv['above'] = ohlcv['ma' + str(short_MA)] >= ohlcv['ma' + str(long_MA)]
+            # ohlcv.to_csv(os.path.join(f"out_index_buy_hold_{str(short_MA)}MAvs{str(long_MA)}MA", f"{str(short_MA)}ma_above_{str(long_MA)}ma.csv"))
+            ohlcv.to_csv(os.path.join(self.env.out_dir, f"{str(short_MA)}ma_above_{str(long_MA)}ma.csv"))
+
+            return ohlcv.above
+
+
+    class ShortMABelowLongMA(Signal):
+        def __init__(self, short_MA, long_MA):
+            super().__init__(f"{str(short_MA)}dMABelow{str(long_MA)}MA", env)
+
+        def __call__(self, ohlcv):
+            ohlcv['ma' + str(long_MA)] = self.ma(ohlcv, long_MA)
+            ohlcv['ma' + str(short_MA)] = self.ma(ohlcv, short_MA)
+            ohlcv['below'] = ohlcv['ma' + str(short_MA)] < ohlcv['ma' + str(long_MA)]
+            ohlcv.to_csv(os.path.join(self.env.out_dir, f"{str(short_MA)}ma_below_{str(long_MA)}ma.csv"))
+
+            return ohlcv.below
+
+    entry_signal = ShortMAAboveLongMA(short_MA=short_MA, long_MA=long_MA)
+    exit_signal = ShortMABelowLongMA(short_MA=short_MA, long_MA=long_MA)
+    risk_management = NoRiskManagement()
+    position_management = PositionManagement(initial_position=100000, policy="fixed_fraction", fraction=1.0)
+
+    s = SignalDrivenStrategy(
+        env=env,
+        entry_signal=entry_signal,
+        exit_signal=exit_signal,
+        risk_management=risk_management,
+        position_management=position_management,
+        name=name)
+    s.backtest(ticker=ticker, from_date=from_date)
+
 
 
