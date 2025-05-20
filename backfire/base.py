@@ -99,7 +99,9 @@ class AlwaysOnSignal(Signal):
         super().__init__("AlwaysOnSignal")
 
     def __call__(self, ohlcv):
-        rv = ohlcv.apply(lambda row: True, axis=1)
+        rv = pd.DataFrame(index=ohlcv.index)
+        rv['es'] = True
+        rv['id'] = 1
         return rv
 
 class AlwaysOffSignal(Signal):
@@ -107,7 +109,9 @@ class AlwaysOffSignal(Signal):
         super().__init__("AlwaysOffSignal")
 
     def __call__(self, ohlcv):
-        rv = ohlcv.apply(lambda row: False, axis=1)
+        rv = pd.DataFrame(index=ohlcv.index)
+        rv['es'] = False
+        rv['id'] = 1
         return rv
 
 

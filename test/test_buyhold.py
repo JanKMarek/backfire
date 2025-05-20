@@ -1,5 +1,4 @@
-from backfire.base import Environment, NoRiskManagement, SignalDrivenStrategy
-from backfire.signals import AlwaysOnSignal
+from backfire.base import Environment, NoRiskManagement, SignalDrivenStrategy, AlwaysOnSignal
 
 import os
 print(os.getcwd())
@@ -7,9 +6,9 @@ print(os.getcwd())
 ticker = "QQQ"
 name = "Index_BuyAndHold"
 from_date = "2000-01-01"
-out_dir = r"./out/index_buy_hold"
+out_dir = r"../out/index_buy_hold"
 
-env = Environment(md=r".", out_dir=out_dir)
+env = Environment(md=r"../md", out_dir=out_dir)
 entry_signal = AlwaysOnSignal()
 exit_signal = None
 risk_management = NoRiskManagement()
@@ -22,6 +21,6 @@ s = SignalDrivenStrategy(
     risk_management=risk_management,
     name=name)
 
-#s.backtest(ticker=ticker, from_date=from_date)
+s.backtest(ticker=ticker, from_date=from_date)
 
 print("Backtest done.")
