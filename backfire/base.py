@@ -90,178 +90,77 @@ class Signal:
         """
            Generates signal values.
         :param ohlcv: Dataframe with columns 'O', 'H', 'L', 'C', 'V' and indexed with day dates.
-        :return: Dataframe with column 'es' (and possibly intermediate columns) and indexed with day dates
+        :return: Dataframe with columns 'es' and 'id' (and possibly intermediate columns) and indexed with day dates
         """
         pass
 
-class AlwaysOffSignal(Signal):
-    def __init__(self):
-        super().__init__("AlwaysOffSignal")
 
-    def __call__(self, ohlcv):
-        rv = ohlcv.apply(lambda row: False, axis=1)
-        return rv
-
-class RandomEntrySignal(Signal):
+class BasicRiskManagement():
     """
-       Random entry. Useful for testing.
+       Implements three common risk/profit management techniques:
+         i/ Stop loss. Returns label "sl" if stop loss reached.
+         ii/ Take Profit. Returns label "tp" if take profit is reached and not in
+                  trailing stop mode.
+         iii/ Trailing Stop. Returns label "ts" if price has fallen below the trailing stop
+                  moving average AFTER take profit has been reached.
+
+
+        Common configurations:
+          RM(stop_loss=0.07, take_profit=None, trailing_stop_period=None):
+              7% stop loss, no take profit or trailing stop. Exit on exit signal only.
+          RM(stop_loss=0.07, take_profit=0.2, trailing_stop_period=10):
+              7% stop loss, trail with 10d MA after 20% take profit reached
     """
-    def __init__(self, prob=0.2):
-        super().__init__(f"randomentry{prob:.1f}")
-        """
-           Creates a random entry signal every 1/prob days
-        """
-        self.prob = prob
-
-    def __call__(self, ohlcv):
-        high = math.ceil(1 / self.prob)
-        rv = ohlcv.apply(lambda row: np.random.randint(low=0, high=high) == 0, axis=1)
-        return rv
-
-class AlwaysOnSignal(Signal):
-    def __init__(self):
-        super().__init__("AlwaysOnSignal")
-
-    def __call__(self, ohlcv):
-        rv = ohlcv.apply(lambda row: True, axis=1)
-        return rv
-
-class FlatBaseBreakoutSignal(Signal):
-    """
-        Breakout from a flat base.
-    """
-    def __init__(self, length=4*5, height=.1):
-        self.length = length
-        self.height = height
-        super().__init__(f"flatbase{length}_{height:.2f}")
-
-    def __call__(self, ohlcv):
-
-        # flat base
-        ohlcv['shifted'] = ohlcv.C.shift(1)
-        ohlcv['low'] = ohlcv.C.shift(1).rolling(self.length).min()
-        ohlcv['high'] = ohlcv.C.shift(1).rolling(self.length).max()
-        ohlcv['fb'] = ((ohlcv.high - ohlcv.low)) / ohlcv.low < self.height
-
-        # breakout
-        ohlcv['higher_vol'] = ohlcv.V > ohlcv.V.shift(1).rolling(self.length).mean()
-        ohlcv['close_above'] = ohlcv.C > ohlcv.high
-        ohlcv['breakout'] = ohlcv.higher_vol & ohlcv.close_above
-
-        ohlcv['flat_base_breakout'] = ohlcv.fb & ohlcv.breakout
-
-        rv = ohlcv.flat_base_breakout
-        return rv
-
-class BoucherSignal(Signal):
-    def __init__(self):
-        super().__init__(f"Boucher1")
-
-    def __call__(self, ohlcv):
-
-        # flat base
-        ohlcv['shifted'] = ohlcv.C.shift(1)
-        ohlcv['low'] = ohlcv.C.shift(1).rolling(self.length).min()
-        ohlcv['high'] = ohlcv.C.shift(1).rolling(self.length).max()
-        ohlcv['fb'] = ((ohlcv.high - ohlcv.low)) / ohlcv.low < self.height
-
-        # thrust
-        ohlcv['range'] = ohlcv.H - ohlcv.L
-        ohlcv['avg_range'] = ohlcv['range'].shift(1).rolling(self.length).mean()
-        ohlcv['range_greater'] = ohlcv['range'] > ohlcv.avg_range
-        ohlcv['vol_higher'] = ohlcv.V > ohlcv.V.shift(1)
-        ohlcv['close_upper_third'] = ohlcv.C - ohlcv.L > (ohlcv.H - ohlcv.L) * 0.66
-        ohlcv['thrust'] = ohlcv.range_greater & ohlcv.vol_higher & ohlcv.close_upper_third
-
-        # lap
-        ohlcv['lap'] = ohlcv.C >= ohlcv.shift(1).C & ohlcv.C <= ohlcv.shift(1).H
-
-        # gap
-        ohlcv['gap'] = ohlcv.L >= ohlcv.shift(1).H
-
-        #
-
-
-
-        ohlcv['flat_base_breakout'] = ohlcv.fb & ohlcv.thrust_breakout
-
-        rv = ohlcv.flat_base_breakout
-        return rv
-
-class Stage2Signal(Signal):
-    def __init__(self, rise200d_months=1, rise200d_step=0.01):
-        self.rise200d_months = rise200d_months
-        self.rise200d_step = rise200d_step
-        super().__init__(f"Stage2_rise200dlength={rise200d_months}_rise200dstep={rise200d_step}")
-
-    def __call__(self, ohlcv):
-
-        ohlcv['ma50'] = self.ma(ohlcv, 50)
-        ohlcv['ma150'] = self.ma(ohlcv, 150)
-        ohlcv['ma200'] = self.ma(ohlcv, 200)
-
-        ohlcv['criterion_1'] = (ohlcv.C > ohlcv.ma150) & (ohlcv.C > ohlcv.ma200)
-        ohlcv['criterion_2'] = ohlcv.ma150 > ohlcv.ma200
-        ohlcv['criterion_3'] = ((ohlcv.ma200 - ohlcv.ma200.shift(self.rise200d_months*20))
-                                / ohlcv.ma200.shift(self.rise200d_months*20) > self.rise200d_step)
-        ohlcv['criterion_4'] = (ohlcv.ma50 > ohlcv.ma150) & (ohlcv.ma50 > ohlcv.ma200)
-        ohlcv['criterion_5'] = ohlcv.C > ohlcv.ma50
-        ohlcv['criterion_6'] = ohlcv.C > (ohlcv.C.rolling(250, min_periods=50).min() * 1.3)
-        ohlcv['criterion_7'] = ohlcv.C > (ohlcv.C.rolling(250, min_periods=50).max() * 0.75)
-
-        ohlcv['stage2'] = ohlcv.criterion_1 & ohlcv.criterion_2 & \
-            ohlcv.criterion_3 & ohlcv.criterion_4 & ohlcv.criterion_5 & \
-            ohlcv.criterion_6 & ohlcv.criterion_7
-
-        ohlcv.to_csv(os.path.join('out_test', 'stage2.csv'))
-
-        rv = ohlcv.stage2
-        return rv
-
-class OpenProtectiveStop():
-    """
-       Risk management signal.
-    """
-    def __init__(self, stop_loss=0.07, take_profit_threshold=0.2, trailing_stop_period=10):
+    def __init__(self,
+                 stop_loss=None, # 0.07 means 7%
+                 take_profit=None, # 0.2 is 20%
+                 trailing_stop_period=None): # in days
         self.stop_loss = stop_loss
-        self.take_profit_threshold = take_profit_threshold
+        self.take_profit = take_profit
         self.trailing_stop_period = trailing_stop_period
-        self.hit_take_profit_threshold = False
 
-    def get_out(self, label):
-        self.hit_take_profit_threshold = False
-        return label
+        if take_profit is None and trailing_stop_period is not None:
+            raise ValueError("Need take profit to use trailing_stop_period.")
+
+        self.hit_take_profit = False
+        self.last_blocked_signal = None
 
     @property
     def name(self):
-        return f"OpenProtectiveStop_stoploss={self.stop_loss}_take_profit_threshold={self.take_profit_threshold}_trailing_stop_period={self.trailing_stop_period}"
+        return f"OpenProtectiveStop_stoploss={self.stop_loss}_take_profit={self.take_profit}_trailing_stop_period={self.trailing_stop_period}"
 
-    def __call__(self, current_price, buy_price, trailing_stop):
-        if not self.hit_take_profit_threshold and current_price > buy_price * (1.0 + self.take_profit_threshold):
-            self.hit_take_profit_threshold = True
+    def is_blocked(self, signal_id):
+        return True if signal_id == self.last_blocked_signal else False
 
-        if current_price < buy_price * (1.0 - self.stop_loss):
-            return self.get_out("sl")
+    def clear_take_profit_hit(self):
+        self.hit_take_profit = False
 
-        if self.trailing_stop_period is None or self.trailing_stop_period == 0:
-            # no trailing stop observed
-            if current_price > buy_price * (1.0 + self.take_profit_threshold):
-                return self.get_out("tp")
-            else:
-                return None
-        else:
-            # observe trailing stop
-            if self.hit_take_profit_threshold and (current_price > buy_price * (1.0 + self.take_profit_threshold)):
-                if current_price < trailing_stop:
-                    return self.get_out("tp")
-                else:
-                    return None
-            else:
-                return None
+    def __call__(self, current_price, buy_price, trailing_stop, entry_signal_id):
+        """
+           Returns None if no action necessary, or action label (sl, tp, ts)
+        """
+        if self.stop_loss is not None and (current_price < buy_price * (1.0 - self.stop_loss)):
+            return self.get_out("sl", entry_signal_id)
 
-class NoRiskManagement(OpenProtectiveStop):
+        if self.trailing_stop_period is None: # not in trailing stop mode
+            if self.take_profit is not None and current_price > buy_price * (1.0 + self.take_profit):
+                return self.get_out("tp", entry_signal_id)
+        else: # in trailing stop mode
+            if not self.hit_take_profit and current_price > buy_price * (1.0 + self.take_profit):
+                self.hit_take_profit = True
+            if self.hit_take_profit and current_price < trailing_stop:
+                return self.get_out("ts", entry_signal_id)
+
+        return None
+
+    def get_out(self, label, signal_id):
+        self.clear_take_profit_hit()
+        self.last_blocked_signal = signal_id
+        return label
+
+class NoRiskManagement(BasicRiskManagement):
     def __init__(self):
-        super().__init__(stop_loss=1.0, take_profit_threshold=1000)
+        super().__init__(stop_loss=1.0, take_profit=1000, trailing_stop_period=None)
 
     @property
     def name(self):
@@ -373,10 +272,10 @@ class SignalDrivenStrategy(StrategyInterface):
         pas['action'] = np.nan
         pas['memo'] = np.nan
         pas['buy_price'] = np.nan
-        if self.risk_management.trailing_stop_period is None or self.risk_management.trailing_stop_period == 0:
-            pas["trailing_stop"] = np.nan
-        else:
+        pas['trailing_stop'] = np.nan
+        if self.risk_management.trailing_stop_period is not None:
             pas['trailing_stop'] = pas.C.shift(1).rolling(self.risk_management.trailing_stop_period,min_periods=1).mean()
+
         # first row:
         pas.loc[pas.index[0], 'action'] = 'buy' if pas.loc[pas.index[0], 'es'] else np.nan
         pas.loc[pas.index[0], 'cash'] = self.position_management.initial_position
@@ -386,20 +285,26 @@ class SignalDrivenStrategy(StrategyInterface):
             this_row = pas.index[i]
             prev_row = pas.index[i-1]
 
+            bkpt_date = '2000-02-15'
+            if this_row == datetime.strptime(bkpt_date, '%Y-%m-%d').date():
+                print('breakpoint')
+
             #
             # morning actions - update position based on prev day's position and prev day's action flag
             #  updates fields pos, cash, buy_price and memo
 
             # sell because of flag from prev day
-            if pas.loc[prev_row, 'pos'] != 0 and pas.loc[prev_row, 'action'] in ['xs', 'sl', 'pc', 'tp']:
+            if pas.loc[prev_row, 'pos'] != 0 and pas.loc[prev_row, 'action'] in ['xs', 'sl', 'pc', 'tp', 'ts']:
                 pas.loc[this_row, 'pos'] = 0
                 pas.loc[this_row, 'cash'] = pas.loc[prev_row, 'cash'] + \
                                             pas.loc[prev_row, 'pos'] * pas.loc[this_row, 'O']
                 pas.loc[this_row, 'buy_price'] = np.nan
                 action = pas.loc[prev_row, 'action']
-                pas.loc[this_row, 'memo'] =f"sold-{self.exit_signal.name if action == 'xs' else action}" 
+                pas.loc[this_row, 'memo'] =f"sold-{self.exit_signal.name if action == 'xs' else action}"
             # buy because of flag from prev day
-            elif pas.loc[prev_row, 'pos'] == 0 and pas.loc[prev_row, 'action'] == 'buy':
+            elif (pas.loc[prev_row, 'pos'] == 0 and
+                  pas.loc[prev_row, 'action'] == 'buy' and
+                  (not self.risk_management.is_blocked(pas.loc[prev_row, 'es_id']))):
                 pas.loc[this_row, 'pos'] = \
                     self.position_management.pos(pas.loc[prev_row, 'cash']) / pas.loc[this_row, 'O']
                 pas.loc[this_row, 'cash'] = pas.loc[prev_row, 'cash'] - \
@@ -417,15 +322,18 @@ class SignalDrivenStrategy(StrategyInterface):
             # evening actions - recalculate stoploss, set trading action flag for next day
             #     updates field action
 
-            risk_management_signal = self.risk_management(pas.loc[this_row, 'C'],
-                                                          pas.loc[this_row, 'buy_price'],
-                                                          pas.loc[this_row, 'trailing_stop'])
+            risk_management_signal = self.risk_management(
+                current_price=pas.loc[this_row, 'C'],
+                buy_price=pas.loc[this_row, 'buy_price'],
+                trailing_stop=pas.loc[this_row, 'trailing_stop'],
+                entry_signal_id=pas.loc[this_row, 'es_id'])
             # position is flat and signal triggered -> set action to buy next day
             if pas.loc[this_row, 'pos'] == 0 and pas.loc[this_row, 'es']:
                 pas.loc[this_row, 'action'] = 'buy'
             # have position and exit signal triggered
             elif pas.loc[this_row, 'pos'] != 0 and pas.loc[this_row, 'xs']:
                 pas.loc[this_row, 'action'] = 'xs'
+                self.risk_management.clear_take_profit_hit()
             # have position and risk management signal triggered
             elif pas.loc[this_row, 'pos'] != 0 and risk_management_signal is not None:
                 pas.loc[this_row, 'action'] = risk_management_signal
@@ -468,8 +376,9 @@ class SignalDrivenStrategy(StrategyInterface):
         """
            Merge ohlcv and signal_values into one dataframe for easy visualization.
         """
+        entry_signal.rename(columns={'id': 'es_id'}) # NB don't need to worry about exit signal
         rv = pd.concat([ohlcv, entry_signal, exit_signal], axis=1)
-        rv = rv[['O', 'H', 'L', 'C', 'V', 'es', 'xs']]
+        rv = rv[['O', 'H', 'L', 'C', 'V', 'es', 'es_id', 'xs']]
         rv['es'] = np.where(rv.es, rv.C, 0)
         rv['xs'] = np.where(rv['xs'], rv.C, 0)
         return rv
@@ -495,11 +404,11 @@ class SignalDrivenStrategy(StrategyInterface):
 
         ohlcv = self._env.load_ohlcv(ticker, from_date, to_date)
 
-        entry_signal = self.entry_signal(ohlcv)
-        entry_signal.rename('es', inplace=True)
-        exit_signal = self.exit_signal(ohlcv)
-        exit_signal.rename('xs', inplace=True)
-        price_and_signals = self._make_price_and_signals(ohlcv, entry_signal, exit_signal)
+        es = self.entry_signal(ohlcv)
+        es.rename(columns={'es': 'es', 'id': 'es_id'}, inplace=True)
+        xs = self.exit_signal(ohlcv)
+        xs.rename(columns={'es': 'xs', 'id': 'xs_id'}, inplace=True)
+        price_and_signals = self._make_price_and_signals(ohlcv, es, xs)
 
         positions = self._run(price_and_signals)
 
@@ -535,23 +444,26 @@ class Evaluator:
         stats['no_trades'] = len(trades)
         stats['no_winning_trades'] = len(trades[trades.pnl >= 0])
         stats['no_losing_trades'] = len(trades[trades.pnl < 0])
-        stats['win/loss ratio'] = round(stats["no_winning_trades"] / stats["no_trades"], 2)
         stats['EV'] = round(trades.pnl_pcnt.mean(), 2)
+        stats['win/loss ratio'] = round(stats["no_winning_trades"] / stats["no_trades"], 2)
         stats['avg_winning_pnl_pcnt'] = round(trades[trades.pnl >= 0].pnl_pcnt.mean(), 2)
         stats['avg_losing_pnl_pcnt'] = round(trades[trades.pnl < 0].pnl_pcnt.mean(), 2)
-        stats['r'] = stats['avg_winning_pnl_pcnt'] / abs(stats['avg_losing_pnl_pcnt'])
+        stats['r'] = round(stats['avg_winning_pnl_pcnt'] / abs(stats['avg_losing_pnl_pcnt']), 2)
         stats['min_pnl_pcnt'] = round(trades.pnl_pcnt.min(), 2)
         stats['max_pnl_pcnt'] = round(trades.pnl_pcnt.max(), 2)
 #        stats['std_pnl_pcnt'] = round(trades.pnl_pcnt.std(), 2)
-        stats['avg_hp'] = trades.hp.mean()
-        stats['avg_winning_hp'] = trades[trades.pnl >= 0].hp.mean()
-        stats['avg_losing_hp'] = trades[trades.pnl < 0].hp.mean()
+        stats['avg_hp'] = round(trades.hp.mean(), 2)
+        stats['avg_winning_hp'] = round(trades[trades.pnl >= 0].hp.mean(), 2)
+        stats['avg_losing_hp'] = round(trades[trades.pnl < 0].hp.mean(), 2)
         stats['total_pnl'] = round(trades.pnl.sum(), 2)
+        stats['positive_pnl'] = round(trades[trades.pnl >= 0].pnl.sum(), 2)
+        stats['negative_pnl'] = round(trades[trades.pnl < 0].pnl.sum(), 2)
 
         rtn = 1 + (trades.pnl.sum() / initial_position)
+        stats['rtn'] = round(rtn, 2)
         tim = to_date - from_date
         stats["time_span"] = tim
-        stats['cagr'] = math.pow(rtn, 365 / tim.days) - 1
+        stats['cagr'] = round(math.pow(rtn, 365 / tim.days) - 1, 2)
 
         # Max Drawdown - Realized
         equity = trades.pnl.cumsum().to_frame()
@@ -560,78 +472,52 @@ class Evaluator:
         equity['CumMax'] = equity.equity.cummax()
         equity['dd'] = equity.CumMax - equity.equity
         equity['dd_pcnt'] = equity.dd / equity.CumMax
-        stats['max_dd_pcnt_realized'] = equity.dd_pcnt.max()
+        stats['max_dd_pcnt_realized'] = round(equity.dd_pcnt.max(), 2)
 
         # Max Drawdown - Unrealized
         positions['balance'] = positions.cash + positions.pos * positions.C
         positions['unrealized_CumMax'] = positions.balance.cummax()
         positions['unrealized_dd'] = positions.unrealized_CumMax - positions.balance
         positions['unrealized_dd_pcnt'] = positions.unrealized_dd / positions.unrealized_CumMax
-        stats['max_dd_pcnt_unrealized'] = positions.unrealized_dd_pcnt.max()
+        stats['max_dd_pcnt_unrealized'] = round(positions.unrealized_dd_pcnt.max(), 2)
 
         stats = pd.Series(name="stats", data=stats)
         return stats, trades
 
-if __name__ == "__main__":
-    import os
-    from datetime import datetime
-    import pandas as pd
-    import numpy as np
-
-
-
-
-    short_MA = 2 # days
-    long_MA = 30 * 5 # days
-
-    ticker = 'QQQ' # '^IXIC_1990'
-    name = f"Index_{str(short_MA)}dMAvs{str(long_MA)}dMA"
-    from_date = '2000-01-01' # '2013-03-01' # '1999-06-01' # "1990-01-01"
-    #dir_name = f"out_index_buy_hold_{str(short_MA)}MAvs{str(long_MA)}MA"
-    out_dir = f"out_index_vs_longMA"
-
-
-    env = Environment(md=r"../md/daily", out_dir=out_dir)
-
-    class ShortMAAboveLongMA(Signal):
-        def __init__(self, short_MA, long_MA):
-            super().__init__(f"{str(short_MA)}dMAAbove{str(long_MA)}MA", env)
-
-        def __call__(self, ohlcv):
-            ohlcv['ma' + str(long_MA)] = self.ma(ohlcv, long_MA)
-            ohlcv['ma' + str(short_MA)] = self.ma(ohlcv, short_MA)
-            ohlcv['above'] = ohlcv['ma' + str(short_MA)] >= ohlcv['ma' + str(long_MA)]
-            # ohlcv.to_csv(os.path.join(f"out_index_buy_hold_{str(short_MA)}MAvs{str(long_MA)}MA", f"{str(short_MA)}ma_above_{str(long_MA)}ma.csv"))
-            ohlcv.to_csv(os.path.join(self.env.out_dir, f"{str(short_MA)}ma_above_{str(long_MA)}ma.csv"))
-
-            return ohlcv.above
-
-
-    class ShortMABelowLongMA(Signal):
-        def __init__(self, short_MA, long_MA):
-            super().__init__(f"{str(short_MA)}dMABelow{str(long_MA)}MA", env)
-
-        def __call__(self, ohlcv):
-            ohlcv['ma' + str(long_MA)] = self.ma(ohlcv, long_MA)
-            ohlcv['ma' + str(short_MA)] = self.ma(ohlcv, short_MA)
-            ohlcv['below'] = ohlcv['ma' + str(short_MA)] < ohlcv['ma' + str(long_MA)]
-            ohlcv.to_csv(os.path.join(self.env.out_dir, f"{str(short_MA)}ma_below_{str(long_MA)}ma.csv"))
-
-            return ohlcv.below
-
-    entry_signal = ShortMAAboveLongMA(short_MA=short_MA, long_MA=long_MA)
-    exit_signal = ShortMABelowLongMA(short_MA=short_MA, long_MA=long_MA)
-    risk_management = NoRiskManagement()
-    position_management = PositionManagement(initial_position=100000, policy="fixed_fraction", fraction=1.0)
-
-    s = SignalDrivenStrategy(
-        env=env,
-        entry_signal=entry_signal,
-        exit_signal=exit_signal,
-        risk_management=risk_management,
-        position_management=position_management,
-        name=name)
-    s.backtest(ticker=ticker, from_date=from_date)
+# if __name__ == "__main__":
+#
+#     short_MA = 50 # days
+#     long_MA = 200 # days
+#     stop_loss = None
+#     take_profit = 0.6
+#     trailing_stop_period = 200
+#
+#     ticker = 'QQQ' # '^IXIC_1990'
+#     name = f"Index_{str(short_MA)}dMAvs{str(long_MA)}dMA"
+#     from_date = '2000-01-01'
+#     out_dir = f"../out/{name}"
+#     md = "../md"
+#
+#     env = Environment(md=md, out_dir=out_dir)
+#
+#
+#     entry_signal = ShortMAAboveLongMA(short_MA=short_MA, long_MA=long_MA)
+#     exit_signal = ShortMABelowLongMA(short_MA=short_MA, long_MA=long_MA)
+#     #risk_management = NoRiskManagement()
+#     risk_management = BasicRiskManagement(
+#         stop_loss=stop_loss,
+#         take_profit=take_profit,
+#         trailing_stop_period=trailing_stop_period)
+#     position_management = PositionManagement(initial_position=100000, policy="fixed_fraction", fraction=1.0)
+#
+#     s = SignalDrivenStrategy(
+#         env=env,
+#         entry_signal=entry_signal,
+#         exit_signal=exit_signal,
+#         risk_management=risk_management,
+#         position_management=position_management,
+#         name=name)
+#     s.backtest(ticker=ticker, from_date=from_date)
 
 
 
