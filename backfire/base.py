@@ -94,6 +94,22 @@ class Signal:
         """
         pass
 
+class AlwaysOnSignal(Signal):
+    def __init__(self):
+        super().__init__("AlwaysOnSignal")
+
+    def __call__(self, ohlcv):
+        rv = ohlcv.apply(lambda row: True, axis=1)
+        return rv
+
+class AlwaysOffSignal(Signal):
+    def __init__(self):
+        super().__init__("AlwaysOffSignal")
+
+    def __call__(self, ohlcv):
+        rv = ohlcv.apply(lambda row: False, axis=1)
+        return rv
+
 
 class BasicRiskManagement():
     """
