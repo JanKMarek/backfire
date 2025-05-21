@@ -92,26 +92,35 @@ class Signal:
         :param ohlcv: Dataframe with columns 'O', 'H', 'L', 'C', 'V' and indexed with day dates.
         :return: Dataframe with columns 'es' and 'id' (and possibly intermediate columns) and indexed with day dates
         """
+        rv = self._call_impl(ohlcv)
+
+        # create signal ids
+        is_start_of_true_block = rv.es & (rv.es != rv.es.shift(1).fillna(False))
+        block_ids_raw = is_start_of_true_block.cumsum()
+        rv['id'] = block_ids_raw.where(rv.es)
+
+        return rv
+
+    def _call_impl(self, ohlcv):
+        # return dataframe indexed on date with at least one column 'es' containing True/False
         pass
 
 class AlwaysOnSignal(Signal):
     def __init__(self):
         super().__init__("AlwaysOnSignal")
 
-    def __call__(self, ohlcv):
+    def _call_impl(self, ohlcv):
         rv = pd.DataFrame(index=ohlcv.index)
         rv['es'] = True
-        rv['id'] = 1
         return rv
 
 class AlwaysOffSignal(Signal):
     def __init__(self):
         super().__init__("AlwaysOffSignal")
 
-    def __call__(self, ohlcv):
+    def _call_impl(self, ohlcv):
         rv = pd.DataFrame(index=ohlcv.index)
         rv['es'] = False
-        rv['id'] = 1
         return rv
 
 

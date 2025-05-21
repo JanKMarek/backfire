@@ -1,23 +1,26 @@
 import os
+import math
+import numpy as np
+
 
 from .base import Signal
 
-# ticker = '^IXIC'
-# label = "SDS_standard"
-# from_date = "2000-01-01"
-# out_dir = r"./out_market_indicator_visualize"
+# class RandomEntrySignal(Signal):
+#     """
+#        Random entry. Useful for testing.
+#     """
+#     def __init__(self, prob=0.2):
+#         super().__init__(f"randomentry{prob:.1f}")
+#         """
+#            Creates a random entry signal every 1/prob days
+#         """
+#         self.prob = prob
 #
-# import os
-# from datetime import datetime
-# import pandas as pd
-# import numpy as np
-# pd.options.display.float_format = '{:,.2f}'.format
-#
-# ohlcv = pd.read_csv(os.path.join(r'../md/daily', '^IXIC_1990.csv'))
-# #ohlcv['Date'] = pd.to_datetime(ohlcv.Date)
-# #ohlcv.set_index('Date', inplace=True, drop=True)
-# ohlcv = ohlcv[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
-# ohlcv
+#     def __call__(self, ohlcv):
+#         high = math.ceil(1 / self.prob)
+#         rv = ohlcv.apply(lambda row: np.random.randint(low=0, high=high) == 0, axis=1)
+#         return rv
+
 
 class ShortMAAboveLongMA(Signal):
     def __init__(self, short_MA, long_MA):
@@ -25,21 +28,12 @@ class ShortMAAboveLongMA(Signal):
         self.short_MA = short_MA
         self.long_MA = long_MA
 
-    def __call__(self, in_ohlcv):
+    def _call_impl(self, in_ohlcv):
         ohlcv = in_ohlcv.copy()
         ohlcv['ma' + str(self.long_MA)] = self.ma(ohlcv, self.long_MA)
         ohlcv['ma' + str(self.short_MA)] = self.ma(ohlcv, self.short_MA)
-        ohlcv['above'] = ohlcv['ma' + str(self.short_MA)] >= ohlcv['ma' + str(self.long_MA)]
-
-        # create signal ids
-        is_start_of_true_block = ohlcv.above & (ohlcv.above != ohlcv.above.shift(1).fillna(False))
-        block_ids_raw = is_start_of_true_block.cumsum()
-        ohlcv['id'] = block_ids_raw.where(ohlcv.above)
-        ohlcv['es'] = ohlcv.above
-
-        #ohlcv.to_csv(os.path.join(self.env.out_dir, f"{str(short_MA)}ma_above_{str(long_MA)}ma.csv"))
-        return ohlcv[['es', 'id']]
-
+        ohlcv['es'] = ohlcv['ma' + str(self.short_MA)] >= ohlcv['ma' + str(self.long_MA)]
+        return ohlcv['es'].to_frame()
 
 class ShortMABelowLongMA(Signal):
     def __init__(self, short_MA, long_MA):
@@ -47,38 +41,12 @@ class ShortMABelowLongMA(Signal):
         self.short_MA = short_MA
         self.long_MA = long_MA
 
-    def __call__(self, in_ohlcv):
+    def _call_impl(self, in_ohlcv):
         ohlcv = in_ohlcv.copy()
         ohlcv['ma' + str(self.long_MA)] = self.ma(ohlcv, self.long_MA)
         ohlcv['ma' + str(self.short_MA)] = self.ma(ohlcv, self.short_MA)
-        ohlcv['below'] = ohlcv['ma' + str(self.short_MA)] < ohlcv['ma' + str(self.long_MA)]
-        # create signal ids
-        is_start_of_true_block = ohlcv.below & (ohlcv.below != ohlcv.below.shift(1).fillna(False))
-        block_ids_raw = is_start_of_true_block.cumsum()
-        ohlcv['id'] = block_ids_raw.where(ohlcv.below)
-        ohlcv['es'] = ohlcv.below
-
-        #ohlcv.to_csv(os.path.join(self.env.out_dir, f"{str(short_MA)}ma_below_{str(long_MA)}ma.csv"))
-        return ohlcv[['es', 'id']]
-
-
-
-class RandomEntrySignal(Signal):
-    """
-       Random entry. Useful for testing.
-    """
-    def __init__(self, prob=0.2):
-        super().__init__(f"randomentry{prob:.1f}")
-        """
-           Creates a random entry signal every 1/prob days
-        """
-        self.prob = prob
-
-    def __call__(self, ohlcv):
-        high = math.ceil(1 / self.prob)
-        rv = ohlcv.apply(lambda row: np.random.randint(low=0, high=high) == 0, axis=1)
-        return rv
-
+        ohlcv['es'] = ohlcv['ma' + str(self.short_MA)] < ohlcv['ma' + str(self.long_MA)]
+        return ohlcv['es'].to_frame()
 
 class FlatBaseBreakoutSignal(Signal):
     """
