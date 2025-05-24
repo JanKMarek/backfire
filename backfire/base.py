@@ -102,6 +102,11 @@ class Signal:
         return rv
 
     def _call_impl(self, ohlcv):
+        """
+           Returns a dataframe with date index containing dates, and at least column 'es' containing True/False
+        :param ohlcv:
+        :return:
+        """
         # return dataframe indexed on date with at least one column 'es' containing True/False
         pass
 
@@ -260,11 +265,14 @@ class SignalDrivenStrategy(StrategyInterface):
             2. Calculate signal values (es) - can use all OHLCV fields.
             3. Calculate the action for the next day (buy, sl, so, tp, etc). CAn use all OHLCV fields.
     """
-    def __init__(self, env, entry_signal,
+    def __init__(self,
+                 env,
+                 entry_signal,
                  exit_signal=AlwaysOffSignal(),
                  risk_management=NoRiskManagement(),
                  position_management=PositionManagement(),
-                 name=None):
+                 name=None,
+                 save_signals=True):
         self._env = env
         self.entry_signal = entry_signal
         self.exit_signal=AlwaysOffSignal() if exit_signal is None else exit_signal
@@ -278,6 +286,7 @@ class SignalDrivenStrategy(StrategyInterface):
                           f"position_management={self.position_management.name}")
         else:
             self._name = name
+        self.save_signals = save_signals
 
     @property
     def name(self):
@@ -351,11 +360,15 @@ class SignalDrivenStrategy(StrategyInterface):
             # evening actions - recalculate stoploss, set trading action flag for next day
             #     updates field action
 
-            risk_management_signal = self.risk_management(
+            # risk management generates actions sl, tp, ts
+            risk_management_action = self.risk_management(
                 current_price=pas.loc[this_row, 'C'],
                 buy_price=pas.loc[this_row, 'buy_price'],
                 trailing_stop=pas.loc[this_row, 'trailing_stop'],
                 entry_signal_id=pas.loc[this_row, 'es_id'])
+            # position management generates actions buy, add, sell, reduce with # of shares
+
+
             # position is flat and signal triggered -> set action to buy next day
             if pas.loc[this_row, 'pos'] == 0 and pas.loc[this_row, 'es']:
                 pas.loc[this_row, 'action'] = 'buy'
@@ -364,8 +377,8 @@ class SignalDrivenStrategy(StrategyInterface):
                 pas.loc[this_row, 'action'] = 'xs'
                 self.risk_management.clear_take_profit_hit()
             # have position and risk management signal triggered
-            elif pas.loc[this_row, 'pos'] != 0 and risk_management_signal is not None:
-                pas.loc[this_row, 'action'] = risk_management_signal
+            elif pas.loc[this_row, 'pos'] != 0 and risk_management_action is not None:
+                pas.loc[this_row, 'action'] = risk_management_action
             # else no action flag for tomorrow
             else:
                 pas.loc[this_row, 'action'] = np.nan
@@ -434,8 +447,12 @@ class SignalDrivenStrategy(StrategyInterface):
         ohlcv = self._env.load_ohlcv(ticker, from_date, to_date)
 
         es = self.entry_signal(ohlcv)
+        if self.save_signals:
+            es.to_csv(os.path.join(self._env.out_dir, f"{self.entry_signal.name}.csv"))
         es.rename(columns={'es': 'es', 'id': 'es_id'}, inplace=True)
         xs = self.exit_signal(ohlcv)
+        if self.save_signals:
+            es.to_csv(os.path.join(self._env.out_dir, f"{self.exit_signal.name}.csv"))
         xs.rename(columns={'es': 'xs', 'id': 'xs_id'}, inplace=True)
         price_and_signals = self._make_price_and_signals(ohlcv, es, xs)
 

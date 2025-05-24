@@ -1,26 +1,9 @@
 import os
 import math
 import numpy as np
-
+import pandas as pd
 
 from .base import Signal
-
-# class RandomEntrySignal(Signal):
-#     """
-#        Random entry. Useful for testing.
-#     """
-#     def __init__(self, prob=0.2):
-#         super().__init__(f"randomentry{prob:.1f}")
-#         """
-#            Creates a random entry signal every 1/prob days
-#         """
-#         self.prob = prob
-#
-#     def __call__(self, ohlcv):
-#         high = math.ceil(1 / self.prob)
-#         rv = ohlcv.apply(lambda row: np.random.randint(low=0, high=high) == 0, axis=1)
-#         return rv
-
 
 class ShortMAAboveLongMA(Signal):
     def __init__(self, short_MA, long_MA):
@@ -47,6 +30,196 @@ class ShortMABelowLongMA(Signal):
         ohlcv['ma' + str(self.short_MA)] = self.ma(ohlcv, self.short_MA)
         ohlcv['es'] = ohlcv['ma' + str(self.short_MA)] < ohlcv['ma' + str(self.long_MA)]
         return ohlcv['es'].to_frame()
+
+class FTDSignal(Signal):
+    def __init__(self, ftd_min_gain=0.017, rally_attempt_min_days=4):
+        super().__init__(f"FTD_{ftd_min_gain}_{rally_attempt_min_days}")
+        self.ftd_min_gain = ftd_min_gain
+        self.rally_attempt_min_days = rally_attempt_min_days
+
+    def is_follow_through_day(self, ohlcv_data, ftd_min_gain=0.017, rally_attempt_min_days=4):
+        """
+        Identifies William O'Neil's Follow-Through Day (FTD) from OHLCV data.
+
+        Args:
+            ohlcv_data (pd.DataFrame): DataFrame with 'Open', 'High', 'Low', 'Close', 'Volume' columns.
+                                       The DataFrame should be sorted by date in ascending order.
+                                       The index should be a DatetimeIndex.
+            ftd_min_gain (float): Minimum percentage gain for a day to be considered an FTD
+                                  (e.g., 0.017 for 1.7%). O'Neil often cited ranges like 1.5% to 2% or more.
+            rally_attempt_min_days (int): Minimum day of the rally attempt on which an FTD can occur (typically 4).
+
+        Returns:
+            pd.Series: A boolean Series with the same index as ohlcv_data,
+                       True if the day is an FTD, False otherwise.
+        """
+        if not isinstance(ohlcv_data, pd.DataFrame):
+            raise ValueError("ohlcv_data must be a pandas DataFrame.")
+        if not all(col in ohlcv_data.columns for col in ['Open', 'High', 'Low', 'Close', 'Volume']):
+            raise ValueError("DataFrame must contain 'Open', 'High', 'Low', 'Close', 'Volume' columns.")
+        if not isinstance(ohlcv_data.index, pd.DatetimeIndex):
+            raise ValueError("DataFrame index must be a DatetimeIndex.")
+        if ohlcv_data.empty:
+            return pd.Series(dtype=bool)
+
+        # Ensure data is sorted by date
+        ohlcv_data = ohlcv_data.sort_index()
+
+        ftd_signals = pd.Series(False, index=ohlcv_data.index)
+        rally_attempt_day_count = 0
+        rally_low = None  # Stores the low of Day 1 of the current rally attempt
+        last_significant_low_price = None  # Stores the price of the most recent significant low
+        days_since_significant_low = 0
+
+        # Calculate daily percentage change for the 'Close' price
+        ohlcv_data['PriceChange'] = ohlcv_data['Close'].pct_change()
+        # Shift volume to correctly compare current day's volume with previous day's volume
+        ohlcv_data['PreviousVolume'] = ohlcv_data['Volume'].shift(1)
+
+        # Iterate through the data starting from the second day (to have a previous day for comparison)
+        for i in range(1, len(ohlcv_data)):
+
+            if i == 1:
+                ftd_signals = ftd_signals.to_frame()
+                ftd_signals['close'] = 0
+                ftd_signals['price_change'] = 0
+                ftd_signals['volume'] = 0
+                ftd_signals['previous_volume'] = 0
+                ftd_signals['rally_attempt_day_count'] = 0
+                ftd_signals['rally_low'] = 0
+                ftd_signals['last_significant_low_price'] = 0
+                ftd_signals['days_since_significant_low'] = 0
+            ftd_signals.iloc[i-1, ftd_signals.columns.get_loc('close')] = ohlcv_data.iloc[i-1, ohlcv_data.columns.get_loc('Close')]
+            ftd_signals.iloc[i-1, ftd_signals.columns.get_loc('price_change')] = ohlcv_data.iloc[i-1, ohlcv_data.columns.get_loc('PriceChange')]
+            ftd_signals.iloc[i-1, ftd_signals.columns.get_loc('volume')] = ohlcv_data.iloc[i-1, ohlcv_data.columns.get_loc('Volume')]
+            ftd_signals.iloc[i-1, ftd_signals.columns.get_loc('previous_volume')] = ohlcv_data.iloc[i-1, ohlcv_data.columns.get_loc('PreviousVolume')]
+            ftd_signals.iloc[i-1, ftd_signals.columns.get_loc('rally_attempt_day_count')] = rally_attempt_day_count
+            ftd_signals.iloc[i-1, ftd_signals.columns.get_loc('rally_low')] = rally_low
+            ftd_signals.iloc[i-1, ftd_signals.columns.get_loc('last_significant_low_price')] = last_significant_low_price
+            ftd_signals.iloc[i-1, ftd_signals.columns.get_loc('days_since_significant_low')] = days_since_significant_low
+
+            current_day = ohlcv_data.iloc[i]
+            previous_day = ohlcv_data.iloc[i - 1]
+
+            # --- 1. Identify a Potential Market Low before starting a rally attempt count ---
+            # This is a simplified way to check for a prior decline.
+            # A robust system would have a more explicit definition of a "market correction".
+            # We look for a new N-day low to consider the start of a "bottoming process".
+            # Let's define a "significant low" as a new 10-day low for this example.
+            lookback_for_new_low = 10
+            if i >= lookback_for_new_low:
+                if current_day['Low'] <= ohlcv_data['Low'].iloc[max(0, i - lookback_for_new_low):i].min():
+                    last_significant_low_price = current_day['Low']
+                    days_since_significant_low = 0  # Reset counter
+                    rally_attempt_day_count = 0  # Reset any ongoing rally attempt if we hit a new low
+                    rally_low = None
+                    # print(f"{ohlcv_data.index[i].date()}: New significant low detected at {last_significant_low_price:.2f}. Resetting rally attempt.")
+
+            if last_significant_low_price is not None:
+                days_since_significant_low += 1
+
+            # --- 2. Start or Continue a Rally Attempt ---
+            if rally_attempt_day_count == 0:
+                # Day 1 of Rally Attempt: Market closes up after a significant low has been registered.
+                # We need to ensure we are past a potential bottoming point.
+                if last_significant_low_price is not None and current_day['Close'] > previous_day['Close']:
+                    # To be Day 1, the close must be above the low of the day that made the significant low.
+                    # And the current low must hold above that significant low.
+                    if current_day['Low'] >= last_significant_low_price:
+                        rally_attempt_day_count = 1
+                        rally_low = current_day['Low']  # This is the low of Day 1 of the rally attempt.
+                        # print(f"{ohlcv_data.index[i].date()}: Day 1 of Rally Attempt. Rally Low: {rally_low:.2f}. Days since sig. low: {days_since_significant_low}")
+                continue  # Move to the next day if we just started Day 1 or are not in an attempt
+
+            if rally_attempt_day_count > 0:
+                # If current day's low undercuts the low of Day 1 of this rally attempt, reset.
+                if current_day['Low'] < rally_low:
+                    # print(f"{ohlcv_data.index[i].date()}: Rally attempt failed. Current Low {current_day['Low']:.2f} undercut Rally Low {rally_low:.2f}")
+                    rally_attempt_day_count = 0
+                    rally_low = None
+                    last_significant_low_price = None  # Reset this too, to look for a new bottoming process
+                    days_since_significant_low = 0
+
+                    # Check if this day itself can be a new Day 1 (if it closes up after undercutting)
+                    # This requires re-evaluating if a new significant low was formed.
+                    # For simplicity, we'll just reset and wait for a new sequence.
+                    # A more complex logic could try to immediately re-evaluate for a new Day 1.
+                    if current_day['Close'] > previous_day['Close']:
+                        # Potentially a new Day 1, but we need to ensure it's off a proper low.
+                        # The main loop will re-evaluate `last_significant_low_price` on the next iteration.
+                        pass
+                    continue
+
+                rally_attempt_day_count += 1
+                # print(f"{ohlcv_data.index[i].date()}: Day {rally_attempt_day_count} of Rally Attempt. Rally Low: {rally_low:.2f}")
+
+                # --- 3. Identify Follow-Through Day ---
+                if rally_attempt_day_count >= rally_attempt_min_days:
+                    is_significant_gain = current_day['PriceChange'] >= ftd_min_gain
+                    is_volume_higher = current_day['Volume'] > current_day[
+                        'PreviousVolume']  # Compare with actual previous day's volume
+
+                    # Optional: Check if volume is also above its N-day average
+                    # lookback_vol_avg = 50
+                    # if i >= lookback_vol_avg:
+                    #     avg_volume = ohlcv_data['Volume'].iloc[max(0, i - lookback_vol_avg):i].mean()
+                    #     is_volume_above_average = current_day['Volume'] > avg_volume
+                    # else:
+                    #     is_volume_above_average = False # Not enough data for average
+
+                    if is_significant_gain and is_volume_higher:  # and is_volume_above_average (if using)
+                        ftd_signals.iloc[i] = True
+                        # print(f"🎉 {ohlcv_data.index[i].date()}: FOLLOW-THROUGH DAY! "
+                        #       f"Day {rally_attempt_day_count} of attempt. "
+                        #       f"Gain: {current_day['PriceChange']:.2%}, "
+                        #       f"Vol: {current_day['Volume']:.0f} > Prev Vol: {current_day['PreviousVolume']:.0f}")
+
+                        # After an FTD, O'Neil suggests the market is in a "confirmed uptrend".
+                        # Reset rally attempt tracking for this specific sequence.
+                        # The market could have multiple FTDs or failed FTDs over time.
+                        rally_attempt_day_count = 0
+                        rally_low = None
+                        last_significant_low_price = None  # Reset to look for new major cycle lows later
+                        days_since_significant_low = 0
+
+        # Clean up helper columns if they were added to the original DataFrame (if not a copy)
+        # If a copy is passed to the function, this is not strictly necessary for the caller.
+        # However, it's good practice if the function modifies the input df.
+        # For this implementation, we assume a copy is made by the caller if original df needs to be preserved.
+        # del ohlcv_data['PriceChange']
+        # del ohlcv_data['PreviousVolume']
+
+        return ftd_signals
+
+    def _call_impl(self, ohlcv):
+        w = ohlcv.copy()
+        w.rename(columns={'O': 'Open',
+                          'H': 'High',
+                          'L': 'Low',
+                          'C': 'Close',
+                          'V': 'Volume'}, inplace=True)
+        w.index = pd.to_datetime(w.index)
+        rv = self.is_follow_through_day(
+            ohlcv_data=w,
+            ftd_min_gain=self.ftd_min_gain,
+            rally_attempt_min_days=self.rally_attempt_min_days)
+        rv.rename(columns={0: 'es'}, inplace=True)
+        # rv.rename('es', inplace=True)
+        # rv = rv.to_frame()
+        rv.index = rv.index.date
+        return rv
+
+class BreakBelowMA(Signal):
+    def __init__(self, period=50):
+        super().__init__(f"BreakBelow{period}dMA")
+        self.period = period
+
+    def _call_impl(self, ohlcv):
+        ohlcv = ohlcv.copy()
+        ohlcv['ma' + str(self.period)] = self.ma(ohlcv, self.period)
+        ohlcv['es'] = ohlcv['ma' + str(self.period)] >= ohlcv.C
+        return ohlcv['es'].to_frame()
+
 
 class FlatBaseBreakoutSignal(Signal):
     """
