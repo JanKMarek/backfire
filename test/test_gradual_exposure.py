@@ -1,8 +1,9 @@
-from backfire.base import Environment, BasicRiskManagement, SignalDrivenStrategy, PositionManagement
+from backfire.base import Environment, BasicRiskManagement, SignalDrivenStrategy, GradualExposure
 from backfire.signals import ShortMAAboveLongMA, ShortMABelowLongMA
 
 short_MA = 50 # days
 long_MA = 200 # days
+
 stop_loss = 0.07
 take_profit = 0.25
 trailing_stop_period = None
@@ -20,7 +21,13 @@ env = Environment(md=md, out_dir=out_dir)
 entry_signal = ShortMAAboveLongMA(short_MA=short_MA, long_MA=long_MA)
 exit_signal = ShortMABelowLongMA(short_MA=short_MA, long_MA=long_MA)
 
-position_management = PositionManagement(initial_position=100000, policy="fixed_fraction", fraction=1.0)
+position_management = GradualExposure(
+    initial_position=100000,
+    schedule={
+        0: 0.1,
+        0.03: 0.05,
+        0.05: 0.05
+    })
 
 s = SignalDrivenStrategy(
         env=env,

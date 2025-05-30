@@ -128,6 +128,15 @@ class AlwaysOffSignal(Signal):
         rv['es'] = False
         return rv
 
+class ReverseSignal(Signal):
+    def __init__(self, signal):
+        super().__init__(f"ReverseSignal_{signal.name}")
+        self.signal = signal
+
+    def _call_impl(self, ohlcv):
+        rv = self.signal(ohlcv)
+        rv['es'] = ~rv.es
+        return rv
 
 class BasicRiskManagement():
     """
@@ -169,10 +178,16 @@ class BasicRiskManagement():
     def clear_take_profit_hit(self):
         self.hit_take_profit = False
 
-    def __call__(self, current_price, buy_price, trailing_stop, entry_signal_id):
+    def __call__(self, this_row):
+    #def __call__(self, current_price, buy_price, trailing_stop, entry_signal_id):
         """
            Returns None if no action necessary, or action label (sl, tp, ts)
         """
+        current_price = this_row['C']
+        buy_price = this_row['buy_price']
+        trailing_stop = this_row['trailing_stop']
+        entry_signal_id = this_row['es_id']
+
         if self.stop_loss is not None and (current_price < buy_price * (1.0 - self.stop_loss)):
             return self.get_out("sl", entry_signal_id)
 
@@ -304,21 +319,25 @@ class SignalDrivenStrategy(StrategyInterface):
                   buy_price - price at which the current position was bought
 
         """
-        # position management fields
-        pas['pos'] = 0 # number of shares
+
+        pas['pos'] = 0  # in shares
         pas['cash'] = 0
         pas['action'] = np.nan
+        pas['delta_shares'] = 0
         pas['memo'] = np.nan
         pas['buy_price'] = np.nan
         pas['trailing_stop'] = np.nan
+
         if self.risk_management.trailing_stop_period is not None:
             pas['trailing_stop'] = pas.C.shift(1).rolling(self.risk_management.trailing_stop_period,min_periods=1).mean()
 
-        # first row:
-        pas.loc[pas.index[0], 'action'] = 'buy' if pas.loc[pas.index[0], 'es'] else np.nan
         pas.loc[pas.index[0], 'cash'] = self.position_management.initial_position
 
-        # process rows 2 and further
+        # TODO: skip? simplifies the logic
+        # first row:
+        #pas.loc[pas.index[0], 'action'] = 'buy' if pas.loc[pas.index[0], 'es'] else np.nan
+
+        # process from row 2 onwards (so that we have a previous row)
         for i in range(1, len(pas)-1):
             this_row = pas.index[i]
             prev_row = pas.index[i-1]
@@ -327,61 +346,92 @@ class SignalDrivenStrategy(StrategyInterface):
             if this_row == datetime.strptime(bkpt_date, '%Y-%m-%d').date():
                 print('breakpoint')
 
+            # Execution Engine:
+            #   Executes morning trades based on fields action, shares and memo; updates fields position, cash,
+            #       buy_price and memo. Fields action, shares and memo are set the previous night by risk management
+            #       and position management.
             #
-            # morning actions - update position based on prev day's position and prev day's action flag
-            #  updates fields pos, cash, buy_price and memo
-
-            # sell because of flag from prev day
-            if pas.loc[prev_row, 'pos'] != 0 and pas.loc[prev_row, 'action'] in ['xs', 'sl', 'pc', 'tp', 'ts']:
-                pas.loc[this_row, 'pos'] = 0
-                pas.loc[this_row, 'cash'] = pas.loc[prev_row, 'cash'] + \
-                                            pas.loc[prev_row, 'pos'] * pas.loc[this_row, 'O']
-                pas.loc[this_row, 'buy_price'] = np.nan
-                action = pas.loc[prev_row, 'action']
-                pas.loc[this_row, 'memo'] =f"sold-{self.exit_signal.name if action == 'xs' else action}"
-            # buy because of flag from prev day
-            elif (pas.loc[prev_row, 'pos'] == 0 and
-                  pas.loc[prev_row, 'action'] == 'buy' and
-                  (not self.risk_management.is_blocked(pas.loc[prev_row, 'es_id']))):
-                pas.loc[this_row, 'pos'] = \
-                    self.position_management.pos(pas.loc[prev_row, 'cash']) / pas.loc[this_row, 'O']
-                pas.loc[this_row, 'cash'] = pas.loc[prev_row, 'cash'] - \
-                                            pas.loc[this_row, 'pos'] * pas.loc[this_row, 'O']
+            #       delta_shares, memo = self.position_management.morning_execution(pas.loc[prev_row'], pas.loc[this_row])
+            pas.loc[this_row, 'pos'] = pas.loc[prev_row, 'pos'] + pas.loc[prev_row, 'delta_shares']
+            pas.loc[this_row, 'cash'] = pas.loc[prev_row, 'cash'] + (-1) * pas.loc[prev_row, 'delta_shares'] * pas.loc[this_row, 'O']
+            if pas.loc[prev_row, 'delta_shares'] != 0:
+                if pas.loc[prev_row, 'action'] in ['buy']:
+                    t = 'bought'
+                elif pas.loc[prev_row, 'action'] in ['sell', 'sl', 'tp', 'ts']:
+                    t = 'sold'
+                elif pas.loc[prev_row, 'action'] in ['add', 'reduce']:
+                    t = pas.loc[prev_row, 'action'] # NB this will be ignored by make_trades
+                else:
+                    raise ValueError(f"This should never happen: action: {action}, delta_shares: {delta_shares}")
+                pas.loc[this_row, 'memo'] = f"{t}:{pas.loc[prev_row, 'delta_shares']} shares;{pas.loc[prev_row, 'memo']}"
+            if pas.loc[prev_row, 'delta_shares'] > 0 and pd.isna(pas.loc[prev_row, 'buy_price']):
+                # record initial buy price, will be used by both risk and position management
                 pas.loc[this_row, 'buy_price'] = pas.loc[this_row, 'O']
-                pas.loc[this_row, 'memo'] = f"bought-{self.entry_signal.name}"
-            # no trading actions
+            elif pas.loc[this_row, 'delta_shares'] == 0 and not pd.isna(pas.loc[prev_row, 'action']):
+                # we closed pos'n, clear buy_price
+                pas.loc[this_row, 'buy_price'] = np.nan
             else:
-                pas.loc[this_row, 'pos'] = pas.loc[prev_row, 'pos']
-                pas.loc[this_row, 'cash'] = pas.loc[prev_row, 'cash']
+                # carry over the buy_price
                 pas.loc[this_row, 'buy_price'] = pas.loc[prev_row, 'buy_price']
-                pas.loc[this_row, 'memo'] = np.nan
 
-            #
-            # evening actions - recalculate stoploss, set trading action flag for next day
-            #     updates field action
+            if False:
+                # sell because of flag from prev day
+                if pas.loc[prev_row, 'pos'] != 0 and pas.loc[prev_row, 'action'] in ['xs', 'sl', 'pc', 'tp', 'ts']:
+                    pas.loc[this_row, 'pos'] = 0
+                    pas.loc[this_row, 'cash'] = pas.loc[prev_row, 'cash'] + \
+                                                pas.loc[prev_row, 'pos'] * pas.loc[this_row, 'O']
+                    pas.loc[this_row, 'buy_price'] = np.nan
+                    action = pas.loc[prev_row, 'action']
+                    pas.loc[this_row, 'memo'] =f"sold-{self.exit_signal.name if action == 'xs' else action}"
+                # buy because of flag from prev day
+                elif (pas.loc[prev_row, 'pos'] == 0 and
+                      pas.loc[prev_row, 'action'] == 'buy' and
+                      (not self.risk_management.is_blocked(pas.loc[prev_row, 'es_id']))):
+                    pas.loc[this_row, 'pos'] = \
+                        self.position_management.pos(pas.loc[prev_row, 'cash']) / pas.loc[this_row, 'O']
+                    pas.loc[this_row, 'cash'] = pas.loc[prev_row, 'cash'] - \
+                                                pas.loc[this_row, 'pos'] * pas.loc[this_row, 'O']
+                    pas.loc[this_row, 'buy_price'] = pas.loc[this_row, 'O']
+                    pas.loc[this_row, 'memo'] = f"bought-{self.entry_signal.name}"
+                # no trading actions
+                else:
+                    pas.loc[this_row, 'pos'] = pas.loc[prev_row, 'pos']
+                    pas.loc[this_row, 'cash'] = pas.loc[prev_row, 'cash']
+                    pas.loc[this_row, 'buy_price'] = pas.loc[prev_row, 'buy_price']
+                    pas.loc[this_row, 'memo'] = np.nan
 
-            # risk management generates actions sl, tp, ts
-            risk_management_action = self.risk_management(
-                current_price=pas.loc[this_row, 'C'],
-                buy_price=pas.loc[this_row, 'buy_price'],
-                trailing_stop=pas.loc[this_row, 'trailing_stop'],
-                entry_signal_id=pas.loc[this_row, 'es_id'])
-            # position management generates actions buy, add, sell, reduce with # of shares
+            # Evening Actions:
+            #     risk mgmt and pos mgmt set fields action, delta_shares, memo: risk mgmt takes precedence
+            #     risk mgmt sets actions (sl, tp, ts)
+            #     pos mgmt sets actions buy, sell, add, reduce
 
+            # risk management: sl, tp or ts
+            risk_management_action = self.risk_management(pas.loc[this_row])
+            if risk_management_action in ['sl', 'tp', 'ts']:
+                pas.loc[this_row, 'action'] = risk_management_action
+                pas.loc[this_row, 'delta_shares'] = -pas.loc[this_row, 'pos']
+                pas.loc[this_row, 'memo'] = risk_management_action
+                continue
 
+            # position management: buy, add, sell, reduce
             # position is flat and signal triggered -> set action to buy next day
             if pas.loc[this_row, 'pos'] == 0 and pas.loc[this_row, 'es']:
+                if self.risk_management.is_blocked(pas.loc[this_row, 'es_id']):
+                    continue
+                if pas.loc[this_row, 'xs']:
+                    continue
                 pas.loc[this_row, 'action'] = 'buy'
+                pas.loc[this_row, 'delta_shares'] = math.floor(pas.loc[this_row, 'cash'] / pas.loc[this_row, 'C'])
+                pas.loc[this_row, 'memo'] = self.entry_signal.name
             # have position and exit signal triggered
             elif pas.loc[this_row, 'pos'] != 0 and pas.loc[this_row, 'xs']:
-                pas.loc[this_row, 'action'] = 'xs'
+                pas.loc[this_row, 'action'] = 'sell'
+                pas.loc[this_row, 'delta_shares'] = -pas.loc[this_row, 'pos']
+                pas.loc[this_row, 'memo'] = self.exit_signal.name
                 self.risk_management.clear_take_profit_hit()
-            # have position and risk management signal triggered
-            elif pas.loc[this_row, 'pos'] != 0 and risk_management_action is not None:
-                pas.loc[this_row, 'action'] = risk_management_action
             # else no action flag for tomorrow
             else:
-                pas.loc[this_row, 'action'] = np.nan
+                pass
 
         # last row
         prev_row = pas.index[-2]

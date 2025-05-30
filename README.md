@@ -1,5 +1,52 @@
 # Backfire 
 
+# May 26, 2025
+
+Backfire backtests strategies consisting of Entry and Exit signals and common risk management and 
+position management rules. 
+
+The backtest is performed on daily OHLCV data and emulates the action of a trader who evaluates the market state 
+in the evening, decides on actions and then executes the actions in the morning. 
+
+Entry signal: 
+Binary signal (True/False) that triggers either once (e.g., price crosses MA to the upside) or stays on 
+(e.g., price above MA). When the signal triggers, the strategy establishes position. The same 
+signal will not be reentered - i.e., if a position was exited (based on SL, TP, TS or ExitSignal), the position will 
+not be reentered until a new entry signal is triggered. A new signal will also not be entered as long as the exit 
+signal which caused it to be exited is in place. 
+Note that entry signal going from True to False does not mean exiting - only exit signal triggers position exit. Use
+negation of entry signal as exit signal if you need such behaviour. 
+
+Exit signal: 
+Binary signal that can trigger once or stay on. When it triggers, it takes precedence over the entry signal and full 
+position is exited. When it goes off, the position may not be reentered on the same entry signal (strategy needs a new 
+entry signal to put on a position) and may not be reentered as long as an exit signal is on.
+
+Risk management: 
+Backfire supports stop loss, take profit and trailing stop (based on MA), all specified as percentages
+of the underlying. If either of the three is triggered, the current position is closed in full and will not be
+reentered until a new entry signal is generated. 
+
+Position management: 
+Fixed Percentage: invest a percentage of the portfolio equity on entry, sell the entire positon on exit.  
+Gradual Exposure: as long as the same entry signal remains in place, the position size is increased as the 
+underlying appreciates based on a predefined schedule, e.g. 10% initially, add 5% on 5% up and add 5% on 10% up.
+The position will NOT be decreased as the underlying drops (exit is triggered by SL, TP, TS or exit signal). 
+
+Memo on entry: 
+   bought:xxx shares:signal_name; 
+Memo on exit: 
+   sold:xxx shares:SL/TP/TS/exit_signal_name
+
+Notes: 
+I am 
+not sure how adding and reducing positions will be handed here, for now the signal is simply True and False. 
+
+
+
+
+
+
 # Nov 22, 2022
 Use Cases: 
 - Utilities for market data maintenance. This includes 'backfire.py get AAPL' and 'backfire.py update_all'.  

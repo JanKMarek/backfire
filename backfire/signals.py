@@ -31,6 +31,45 @@ class ShortMABelowLongMA(Signal):
         ohlcv['es'] = ohlcv['ma' + str(self.short_MA)] < ohlcv['ma' + str(self.long_MA)]
         return ohlcv['es'].to_frame()
 
+class MWPowerTrend(Signal):
+    def __init__(self, short_MA=21, long_MA=50, short_above_long=5, price_above_short=10):
+        super().__init__(f"PowerTrend_{str(short_MA)}dEMAVS{str(long_MA)}dSMA")
+        self.short_MA = short_MA
+        self.long_MA = long_MA
+        self.short_above_long = short_above_long
+        self.price_above_short = price_above_short
+
+    def _call_impl(self, in_ohlcv):
+        in_ohlcv = in_ohlcv.copy()
+
+        in_ohlcv['EMA21'] = in_ohlcv['C'].ewm(span=self.short_MA, adjust=False).mean()
+        in_ohlcv['SMA50'] = in_ohlcv['C'].rolling(window=self.long_MA, min_periods=1).mean()
+
+        in_ohlcv['EMA_above_SMA'] = in_ohlcv['EMA21'] > in_ohlcv['SMA50']
+        in_ohlcv['EMA_above_SMA_5d'] = \
+            in_ohlcv['EMA_above_SMA'].rolling(window=self.short_above_long).sum() == self.short_above_long
+
+        in_ohlcv['Price_above_EMA21'] = in_ohlcv['C'] > in_ohlcv['EMA21']
+        in_ohlcv['Price_above_EMA21_10d'] = \
+            in_ohlcv['Price_above_EMA21'].rolling(window=self.price_above_short).sum() == self.price_above_short
+
+        in_ohlcv['PowerTrend_Trigger'] = (in_ohlcv['EMA_above_SMA_5d']) & (in_ohlcv['Price_above_EMA21_10d'])
+        in_ohlcv['PowerTrend'] = False
+        power_trend_active = False
+        for i in range(len(in_ohlcv)):
+            if power_trend_active:
+                # Check if 21d EMA crossed below 50d SMA
+                if not in_ohlcv['EMA_above_SMA'].iloc[i]:
+                    power_trend_active = False
+                else:
+                    in_ohlcv.loc[in_ohlcv.index[i], 'PowerTrend'] = True
+            elif in_ohlcv['PowerTrend_Trigger'].iloc[i]:
+                power_trend_active = True
+                in_ohlcv.loc[in_ohlcv.index[i], 'PowerTrend'] = True
+
+        in_ohlcv.rename(columns={'PowerTrend': 'es'}, inplace=True)
+        return in_ohlcv['es'].to_frame()
+
 class FTDSignal(Signal):
     def __init__(self, ftd_min_gain=0.017, rally_attempt_min_days=4):
         super().__init__(f"FTD_{ftd_min_gain}_{rally_attempt_min_days}")
