@@ -1,5 +1,22 @@
 # Backfire 
 
+## Setup
+
+The project is managed with [uv](https://docs.astral.sh/uv/). Python 3.13 is pinned in
+`.python-version`; uv downloads it automatically.
+
+```
+uv sync                                    # create .venv and install everything (incl. dev group)
+uv run python test/test_base.py            # run a script in the environment
+uv run jupyter lab                         # notebooks
+uv add <package>                           # add a runtime dependency
+uv add --dev <package>                     # add a notebook/dev dependency
+```
+
+`uv.lock` is committed — `uv sync` reproduces the exact environment. Notebook and plotting
+packages (jupyterlab, plotly, matplotlib) live in the `dev` dependency group; the `backfire`
+package itself only needs pandas/numpy/pandas-datareader.
+
 # May 26, 2025
 
 Backfire backtests strategies consisting of Entry and Exit signals and common risk management and 
@@ -156,7 +173,7 @@ To-do list:
 - relative strenth - w.r.t nasdaq
 
 ## Miscellaneous
-- run jupyter notebook in conda environment 'investing'
+- run notebooks with `uv run jupyter lab` (see Setup at the top)
 
 
 

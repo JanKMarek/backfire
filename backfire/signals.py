@@ -70,6 +70,27 @@ class MWPowerTrend(Signal):
         in_ohlcv.rename(columns={'PowerTrend': 'es'}, inplace=True)
         return in_ohlcv['es'].to_frame()
 
+class ConsecutiveHigherHighsLows(Signal):
+    def __init__(self, consecutive_days=3):
+        super().__init__(f"{consecutive_days}ConsecutiveHigherHighsLows")
+        self.consecutive_days = consecutive_days
+
+    def _call_impl(self, in_ohlcv):
+        ohlcv = in_ohlcv.copy()
+
+        ohlcv['higher_high'] = ohlcv['H'] > ohlcv['H'].shift(1)
+        ohlcv['higher_low'] = ohlcv['L'] > ohlcv['L'].shift(1)
+        ohlcv['consecutive_condition'] = ohlcv['higher_high'] & ohlcv['higher_low']
+        ohlcv['es'] = ohlcv['consecutive_condition'].rolling(window=self.consecutive_days).sum() == self.consecutive_days
+
+        # Fill NaN values resulting from rolling operation with False
+        # The first (consecutive_days - 1) rows will be NaN
+        ohlcv['es'] = ohlcv['es'].fillna(False)
+
+        return ohlcv['es'].to_frame()
+
+
+
 class FTDSignal(Signal):
     def __init__(self, ftd_min_gain=0.017, rally_attempt_min_days=4):
         super().__init__(f"FTD_{ftd_min_gain}_{rally_attempt_min_days}")
@@ -120,13 +141,15 @@ class FTDSignal(Signal):
 
             if i == 1:
                 ftd_signals = ftd_signals.to_frame()
-                ftd_signals['close'] = 0
-                ftd_signals['price_change'] = 0
-                ftd_signals['volume'] = 0
-                ftd_signals['previous_volume'] = 0
+                # these diagnostic columns take prices, pct changes and None, so seed them
+                # as float - pandas no longer upcasts an int column on assignment
+                ftd_signals['close'] = 0.0
+                ftd_signals['price_change'] = 0.0
+                ftd_signals['volume'] = 0.0
+                ftd_signals['previous_volume'] = 0.0
                 ftd_signals['rally_attempt_day_count'] = 0
-                ftd_signals['rally_low'] = 0
-                ftd_signals['last_significant_low_price'] = 0
+                ftd_signals['rally_low'] = 0.0
+                ftd_signals['last_significant_low_price'] = 0.0
                 ftd_signals['days_since_significant_low'] = 0
             ftd_signals.iloc[i-1, ftd_signals.columns.get_loc('close')] = ohlcv_data.iloc[i-1, ohlcv_data.columns.get_loc('Close')]
             ftd_signals.iloc[i-1, ftd_signals.columns.get_loc('price_change')] = ohlcv_data.iloc[i-1, ohlcv_data.columns.get_loc('PriceChange')]
@@ -207,7 +230,8 @@ class FTDSignal(Signal):
                     #     is_volume_above_average = False # Not enough data for average
 
                     if is_significant_gain and is_volume_higher:  # and is_volume_above_average (if using)
-                        ftd_signals.iloc[i] = True
+                        # column 0 is the boolean signal; the rest of the row holds diagnostics
+                        ftd_signals.iloc[i, 0] = True
                         # print(f"🎉 {ohlcv_data.index[i].date()}: FOLLOW-THROUGH DAY! "
                         #       f"Day {rally_attempt_day_count} of attempt. "
                         #       f"Gain: {current_day['PriceChange']:.2%}, "

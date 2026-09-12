@@ -320,11 +320,13 @@ class SignalDrivenStrategy(StrategyInterface):
 
         """
 
+        # 'action' and 'memo' hold strings, 'cash' holds fractional amounts. Seed them with the
+        # dtype they end up with: pandas no longer silently upcasts a column on .loc assignment.
         pas['pos'] = 0  # in shares
-        pas['cash'] = 0
-        pas['action'] = np.nan
+        pas['cash'] = 0.0
+        pas['action'] = pd.Series(np.nan, index=pas.index, dtype=object)
         pas['delta_shares'] = 0
-        pas['memo'] = np.nan
+        pas['memo'] = pd.Series(np.nan, index=pas.index, dtype=object)
         pas['buy_price'] = np.nan
         pas['trailing_stop'] = np.nan
 
@@ -450,7 +452,7 @@ class SignalDrivenStrategy(StrategyInterface):
         t = []
         d = positions
 #        rv = d[~d.memo.isnull()]
-        rv = d[d.memo.str.startswith("bought") | d.memo.str.startswith("sold")]
+        rv = d[d.memo.str.startswith("bought", na=False) | d.memo.str.startswith("sold", na=False)]
         for i in range(len(rv)):
             ix = rv.index[i]
             if rv.loc[ix, 'memo'].startswith('sold'):
