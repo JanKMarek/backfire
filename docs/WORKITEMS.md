@@ -1,8 +1,15 @@
 # Workitems
-- install matt pocock skills (grill me, implement) 
+- fix remaining README inconsistencies
 - implement backtest.py (yaml strategy defn, encapsulate Strategy.backtest)
+- add Sharpe ratio, Calmar ratio and max time in drawdown statistics 
 - implement plotly dashboard for reviewing results of a strategy
+- implement claude skills encapsulating backtest and analyze strategy
+- implement strategy analysis agent
+- experiment with strategy analysis agent on 50dVS200dMACrossover strategy
+- implement vibha jha's TQQQ strategy
+- analyze vibha jha's TQQQ strategy
 - implement claude skills encapsualting load_ohlcv, backtest, analyze_strategy, visualize_strategy (dashboard)
+- install matt pocock skills (grill me, implement) 
 - implement experiments: 
 ### Experiments
 
@@ -16,8 +23,6 @@ Every simulation run is given an experiment name which may contain a forward sla
 
 
 - implement and analyze: 
-  - vibha jha's TQQQ: FTD, 
-  - 50d vs 200d, 
   - canslim (roppel): MarketState, CupAndHandle, PullbackBreakout, FlatBaseBreakout, Breakdown indicators
   - minervini (vcp): Stage2, VCP, violation exit strategies
 

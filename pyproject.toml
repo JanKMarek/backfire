@@ -10,10 +10,12 @@ dependencies = [
     "pandas-datareader>=0.10",
     "lxml>=5.4",
     "requests>=2.32",
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]
 dev = [
+    "pytest>=8.3",
     "jupyterlab>=4.4",
     "ipykernel>=6.29",
     "matplotlib>=3.10",

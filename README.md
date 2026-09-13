@@ -36,7 +36,7 @@ Underlying stock market instruments:
 Strategy rules: 
 - **general overlay rules**: indicates strategy is inactive (a.k.a 'in cash', 'out of the market') or active (i.e., has positions in the market). General overlay rules may be market related (market in downtrend, market choppy) or strategy related (cool-off period after a period of losing trades)
 - **selection rules**: what underlying should the strategy buy/sell. 
-- **buy rules**: triggers that cause the strategy to buy the underlying. Examples: entry buy rule to establish the initial position in an underlying, add-on rule to add to a winning position. 
+- **buy rules**: triggers that cause the strategy to buy the underlying. Examples: entry buy rule to establish the initial position in an underlying, add-on rule to add to a winning position (may be added in the future)
 - **sell rules**: triggers causing the strategy to sell the underlying. Examples of these are initial stoploss rules to limit losses on losing trades or profit taking rules to take profit in a trade (selling into strength while the underlying is still advancing or selling into weakness after the underlying has begun to decline)
 - **position size rules**: determine how much of the underlying (e.g., the number of shares or total dollar position size) should the strategy buy or sell.  
 
@@ -50,7 +50,7 @@ Strategy "Index 50d/200d MA Crossover".
 - selection rules: always buy/sell QQQ
 - buy rules: when 50d moving average (MA) crosses above 200d MA from below, buy QQQ
 - sell rules: when 50d MA drops below 200d MA, sell QQQ
-- position size rules: always buy/sell as much shares as you can (so spend all portfolio cash) 
+- position size rules: always buy/sell as many shares as you can (so spend all portfolio cash) 
 
 Another example of a strategy: 
 Strategy "CANSLIM Market Leader Breakout, Single Run": 
@@ -110,18 +110,16 @@ Visual Inspection of strategy performance is also helpful. We chart the underlyi
 
 ### Strategy Structure
 To simplify reasoning about strategies and strategy analysis, it is useful to construct a strategy from signals and common rules:  
-- **general market overlay signal**: signal calculated from general market averages (e.g., SPY or QQQ indexes) which indicates the level of exposure the strategy should be taking on.
+- **general market overlay signal**: signal calculated from general market averages (e.g., SPY or QQQ indexes) which indicates the level of exposure the strategy should be taking on. Strategies operating on indexes generally do not need a separate market overlay signal since the general market information will be reflected in the index signals and so will generally need no market overlay signal. 
 - **entry signal**: Binary signal (True/False) that triggers either once (e.g., price crosses MA to the upside) or stays on (e.g., price above MA). When the signal triggers, the strategy establishes position. The same signal will not be reentered - i.e., if a position was exited (based on SL, TP, TS or ExitSignal), the position will not be reentered until a new entry signal is triggered. A new signal will also not be entered as long as the exit signal which caused it to be exited is in place. Note that entry signal going from True to False does not mean exiting - only exit signal triggers position exit. Use negation of entry signal as exit signal if you need such behaviour. 
 - **exit signal**: Binary signal that can trigger once or stay on. When it triggers, it takes precedence over the entry signal and full position is exited. When it goes off, the position may not be reentered on the same entry signal (strategy needs a new entry signal to put on a position) and may not be reentered as long as an exit signal is on.
 - **risk management rules**: 
   - stop loss rule: when in position and trade loss exceeds a threshold, close the position and do not act until a new entry signal is triggered
   - trailing stop rule: when price falls back below a threshold (e.g., 21d MA or -10%), close the position and do not act until a new entry signal is triggered
-  - take profit rule: when in position and trade gain exceeds a threshold, close the position and do not act antil a new entry signal is triggered
+  - take profit rule: when in position and trade gain exceeds a threshold, close the position and do not act until a new entry signal is triggered
 - **position size management rules**: 
     - Fixed Fraction: invest a percentage of the portfolio equity on entry, sell the entire positon on exit.  
-    - Gradual Exposure: as long as the same entry signal remains in place, the position size is increased as the underlying appreciates based on a predefined schedule, e.g. 10% initially, add 5% on 5% up and add 5% on 10% up. The position will NOT be decreased as the underlying drops (exit is triggered by SL, TP, TS or exit signal). 
-
-All signals have values between 0 (no signal) to 1 (maximum signal strength). 
+    - Gradual Exposure (may be implemented in the future): as long as the same entry signal remains in place, the position size is increased as the underlying appreciates based on a predefined schedule, e.g. 10% initially, add 5% on 5% up and add 5% on 10% up. The position will NOT be decreased as the underlying drops (exit is triggered by SL, TP, TS or exit signal). 
 
 
 ### Simulating/backtesting strategy execution 
@@ -130,11 +128,12 @@ The strategy simulation takes the following parameters:
   - start date, end date
   - underlying (ticker)
   - strategy definition (yaml file with command line overrides)
+  - market data location
   - out : persistent output folder ("" means no persistent output)
 
 In the simulation, the strategy starts with a certain portfolio size in cash, executes its rules over the trading period and closes all positions at the end of the trading period.  
 
-The simulation framework generates performance statistics, list of trades, daily file and signal files: 
+The simulation framework generates performance statistics, list of trades, strategy position daily values and signal daily values: 
 
 Performance statistics/metrics: 
 - number of trades: total (N_total), winning (N_win), losing (N_loss).
@@ -164,12 +163,23 @@ List of trades executed by the strategy. For each trade:
 - pnl_pcnt: return on the trade calculated as (exit_price / entry_price) - 1
 - hp: holding period in business days
 
-Daily file - for every day in the trading period: 
+Strategy position daily values - for every day in the trading period: 
 - Date
 - O,H,L,C,V prices
-- es,es_id,xs,pos,cash,action,delta_shares,memo,buy_price,trailing_stop,balance,unrealized_CumMax,unrealized_dd,unrealized_dd_pcnt
+- es,es_id,xs: entry signal, entry signal id, exit signal
+- pos: position at the end of the day (number of shares of the underlying) 
+- cash: cash at the end of the day (in USD)
+- action: action to execute the next day at the market open
+- delta_shares: the number of shares to buy/sell the next day at the market open
+- memo: reason for the action (signal name)
+- buy_price: price at which shares were bought at the market open of the current day
+- trailing_stop: trailing stop for the current position 
+- balance: 
+- unrealized_CumMax
+- unrealized_dd,
+- unrealized_dd_pcnt
 
-Signal files - for each signal a file with one row for every day in the trading period: 
+Signal daily values - for each signal a file with one row for every day in the trading period: 
 - Date
 - signal value 
 - signal id
@@ -190,7 +200,7 @@ Market data is provided in the OHLCV format - open, high, low, close and volume.
 
 - load_ohlcv: This module obtains data from the data source (currently yahoo finance only), caches it for later use and returns it in a dataframe with defined columns. 
 
-- Strategy composed of signals is implemented as class SignalDrivenStrategy. An instance of this class is configured with appropriate instances of entry and exit signals and risk management and position size rules. Signals are implemented as subclasses of class Signal. Each signal value is given a signal id which is important when we do not want to act on the same signal once stopped out, for instance. Common risk management rules are implemented in BasicRiskManagement and position management rules in PositionManagement. The strategy's _run method generates two tables - one with trades generated, the other one with prices, signals and equity curve. 
+- Strategy composed of signals is implemented as class SignalDrivenStrategy which inherits from interface class Strategy. An instance of this class is configured with appropriate instances of entry and exit signals and risk management and position size rules. Signals are implemented as subclasses of class Signal. Each signal value is given a signal id which is important when we do not want to act on the same signal once stopped out, for instance. Common risk management rules are implemented in BasicRiskManagement and position management rules in PositionManagement. The strategy's _run method generates two tables - one with trades generated, the other one with prices, signals and equity curve. 
 
 - Evaluator class computes evaluation metrics.  
 
@@ -229,16 +239,38 @@ strategy:
     policy: fixed_fraction
     fraction: 1.0      
 ```
-`uv run python src/backfire/backtest.py --start_date "2020-01-01" --end_date "2026-07-01" -md "md/daily" --underlying QQQ --strategy my_strategy.yaml --out "test/my_strategy"`
+`uv run python backfire/backtest.py --start_date "2020-01-01" --end_date "2026-07-01" -md "md" --underlying QQQ --strategy strategies/ma_crossover.yaml --out "out/my_strategy"`
 
-- Running visualizatino notebooks: 
+The strategy file names the component classes and their constructor arguments. Any Signal,
+BasicRiskManagement or PositionManagement subclass defined in `backfire.base` or `backfire.signals`
+can be used by its class name; `exit_signal`, `risk_management` and `position_management` are
+optional and fall back to the strategy defaults. An argument that is itself a mapping with a
+`name` is built as a nested signal, which is how combinators are configured:
+
+```yaml
+  exit_signal: 
+    name: ReverseSignal
+    signal: 
+      name: ShortMAAboveLongMA
+      short_MA: 50
+      long_MA: 200
+```
+
+Individual entries can be overridden per run without editing the strategy file - the path is
+dotted from the root of the file and the value is read as YAML, so types are preserved:
+
+`uv run python backfire/backtest.py ... --set strategy.entry_signal.short_MA=20 --set strategy.risk_management.stop_loss=null`
+
+`--out ""` (the default) runs the backtest without writing any persistent output.
+
+- Running visualization notebooks: 
 `uv run jupyter lab`
 
 - Run fast unit tests
-`uv run pytest tests/unit -q`
+`uv run pytest test/unit -q`
 
 - Run full test suite
-`uv run pytest tests -q`
+`uv run pytest test -q`
 
 
 

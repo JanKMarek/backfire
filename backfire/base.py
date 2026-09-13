@@ -15,8 +15,21 @@ class Environment:
     def __init__(self, md="./md", out_dir="./out", conf_dir="."):
         self.md = md
         self.out_dir = out_dir
-        os.makedirs(out_dir, exist_ok = True)
+        if out_dir:  # an empty out_dir means the run keeps no persistent output
+            os.makedirs(out_dir, exist_ok = True)
         self.conf_dir = conf_dir
+
+    def save(self, df, filename, **to_csv_kwargs):
+        """
+            Writes a dataframe into the output directory, or nowhere if the environment
+            was created without one.
+        :return: the path written, or None if there is no output directory
+        """
+        if not self.out_dir:
+            return None
+        path = os.path.join(self.out_dir, filename)
+        df.to_csv(path, **to_csv_kwargs)
+        return path
 
     def load_ohlcv(self, ticker, from_date, to_date=None):
         """
@@ -463,7 +476,10 @@ class SignalDrivenStrategy(StrategyInterface):
                           'exit_date': ix,
                           'exit_price': rv.loc[ix, 'O'],
                           'memo': rv.loc[rv.index[i-1], 'memo'] + ' / ' + rv.loc[ix, 'memo']})
-        rv = pd.DataFrame.from_records(t)
+        # pass the columns explicitly so that a strategy which never traded still returns
+        # a well formed (empty) trade list
+        rv = pd.DataFrame.from_records(t, columns=['ticker', 'entry_date', 'entry_price',
+                                                   'shares', 'exit_date', 'exit_price', 'memo'])
         return rv
 
     def _make_price_and_signals(self, ohlcv, entry_signal, exit_signal):
@@ -500,11 +516,11 @@ class SignalDrivenStrategy(StrategyInterface):
 
         es = self.entry_signal(ohlcv)
         if self.save_signals:
-            es.to_csv(os.path.join(self._env.out_dir, f"{self.entry_signal.name}.csv"))
+            self._env.save(es, f"{self.entry_signal.name}.csv")
         es.rename(columns={'es': 'es', 'id': 'es_id'}, inplace=True)
         xs = self.exit_signal(ohlcv)
         if self.save_signals:
-            es.to_csv(os.path.join(self._env.out_dir, f"{self.exit_signal.name}.csv"))
+            self._env.save(xs, f"{self.exit_signal.name}.csv")
         xs.rename(columns={'es': 'xs', 'id': 'xs_id'}, inplace=True)
         price_and_signals = self._make_price_and_signals(ohlcv, es, xs)
 
@@ -517,12 +533,12 @@ class SignalDrivenStrategy(StrategyInterface):
                                                     self.position_management.initial_position,
                                                     from_date, to_date)
 
-        positions.to_csv(os.path.join(self._env.out_dir, f"pos_{ticker}_{self.name}.csv"),
-                               index=True, header=True, float_format='%.2f')
-        stats.to_csv(os.path.join(self._env.out_dir, f"stats_{ticker}_{self.name}.csv"),
-                     header=True, index=True, float_format='%.2f')
-        trades.to_csv(os.path.join(self._env.out_dir, f"trades_{ticker}_{self.name}.csv"),
-                     header=True, index=True, float_format='%.2f')
+        self._env.save(positions, f"pos_{ticker}_{self.name}.csv",
+                       index=True, header=True, float_format='%.2f')
+        self._env.save(stats, f"stats_{ticker}_{self.name}.csv",
+                       header=True, index=True, float_format='%.2f')
+        self._env.save(trades, f"trades_{ticker}_{self.name}.csv",
+                       header=True, index=True, float_format='%.2f')
 
         return price_and_signals, positions, trades, stats
 
@@ -533,20 +549,29 @@ class Evaluator:
     """
 
     def evaluate_trades(self, trades, positions, initial_position, from_date, to_date):
-        trades['pnl'] = trades.shares * (trades.exit_price - trades.entry_price)
-        trades['pnl_pcnt'] = trades.pnl / (trades.shares * trades.entry_price)
-        trades['hp'] = trades.exit_date - trades.entry_date
-        trades['hp'] = trades.hp.apply(lambda x: x.days)
+        if trades.empty:
+            # a strategy may legitimately not trade at all over a short trading period;
+            # seed the derived columns so that the metrics below evaluate to NA rather than fail
+            for column in ['pnl', 'pnl_pcnt', 'hp']:
+                trades[column] = pd.Series(dtype=float)
+        else:
+            trades['pnl'] = trades.shares * (trades.exit_price - trades.entry_price)
+            trades['pnl_pcnt'] = trades.pnl / (trades.shares * trades.entry_price)
+            trades['hp'] = trades.exit_date - trades.entry_date
+            trades['hp'] = trades.hp.apply(lambda x: x.days)
 
         stats = {}
         stats['no_trades'] = len(trades)
         stats['no_winning_trades'] = len(trades[trades.pnl >= 0])
         stats['no_losing_trades'] = len(trades[trades.pnl < 0])
         stats['EV'] = round(trades.pnl_pcnt.mean(), 2)
-        stats['win/loss ratio'] = round(stats["no_winning_trades"] / stats["no_trades"], 2)
+        stats['win/loss ratio'] = (round(stats["no_winning_trades"] / stats["no_trades"], 2)
+                                   if stats["no_trades"] else np.nan)
         stats['avg_winning_pnl_pcnt'] = round(trades[trades.pnl >= 0].pnl_pcnt.mean(), 2)
         stats['avg_losing_pnl_pcnt'] = round(trades[trades.pnl < 0].pnl_pcnt.mean(), 2)
-        stats['r'] = round(stats['avg_winning_pnl_pcnt'] / abs(stats['avg_losing_pnl_pcnt']), 2)
+        # R is undefined when the strategy had no losing trade to size the winners against
+        stats['r'] = (round(stats['avg_winning_pnl_pcnt'] / abs(stats['avg_losing_pnl_pcnt']), 2)
+                      if stats['avg_losing_pnl_pcnt'] else np.nan)
         stats['min_pnl_pcnt'] = round(trades.pnl_pcnt.min(), 2)
         stats['max_pnl_pcnt'] = round(trades.pnl_pcnt.max(), 2)
 #        stats['std_pnl_pcnt'] = round(trades.pnl_pcnt.std(), 2)
