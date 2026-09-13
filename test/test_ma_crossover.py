@@ -13,8 +13,8 @@ risk_management = BasicRiskManagement(stop_loss=stop_loss,
 ticker = 'QQQ'
 name = f"ShortMAVsLongMA"
 from_date = '2000-01-01'
-out_dir = f"../out/{name}"
-md = "../md"
+out_dir = f"./out/test/{name}"
+md = "./md"
 
 env = Environment(md=md, out_dir=out_dir)
 entry_signal = ShortMAAboveLongMA(short_MA=short_MA, long_MA=long_MA)

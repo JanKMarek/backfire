@@ -1,6 +1,5 @@
 
 ## Workitems
-- verify tests still work
 - verify visualization notebooks still work
 - review README.md for inconsistencies and improvements
 - install matt pocock skills (grill me, implement) 

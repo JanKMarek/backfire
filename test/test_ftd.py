@@ -17,8 +17,8 @@ risk_management = BasicRiskManagement(stop_loss=stop_loss,
 ticker = 'QQQ'
 name = f"FTDvsBB50"
 from_date = '2000-01-01'
-out_dir = f"../out/{name}"
-md = "../md"
+out_dir = f"./out/test/{name}"
+md = "./md"
 
 env = Environment(md=md, out_dir=out_dir)
 entry_signal = FTDSignal(ftd_min_gain=ftd_min_gain, rally_attempt_min_days=ftd_rally_attempt_min_days)

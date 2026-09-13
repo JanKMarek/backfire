@@ -3,7 +3,7 @@ import backfire as bf
 if __name__ == '__main__':
 
     # OHLCV records for a ticker
-    env = bf.Environment(md=r"../md/daily", out_dir=r"./out_test")
+    env = bf.Environment(md=r"./md/daily", out_dir=r"./out/test")
 
     # SignalDriveStrategy, standard configuration (7% stoploss, follow w/10d ma after 20%)
     s = bf.SignalDrivenStrategy(

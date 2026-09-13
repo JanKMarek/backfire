@@ -12,7 +12,7 @@ class Environment:
         - out_dir - output directory
         - conf_dir - configuration directory
     """
-    def __init__(self, md=".", out_dir=".", conf_dir="."):
+    def __init__(self, md="./md", out_dir="./out", conf_dir="."):
         self.md = md
         self.out_dir = out_dir
         os.makedirs(out_dir, exist_ok = True)
@@ -346,7 +346,7 @@ class SignalDrivenStrategy(StrategyInterface):
 
             bkpt_date = '2000-02-15'
             if this_row == datetime.strptime(bkpt_date, '%Y-%m-%d').date():
-                print('breakpoint')
+                pass # print('breakpoint')
 
             # Execution Engine:
             #   Executes morning trades based on fields action, shares and memo; updates fields position, cash,

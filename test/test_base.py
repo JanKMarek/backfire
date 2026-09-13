@@ -10,10 +10,8 @@ trailing_stop_period = 200
 ticker = 'QQQ'  # '^IXIC_1990'
 name = f"Index_{str(short_MA)}dMAvs{str(long_MA)}dMA"
 from_date = '2000-01-01'
-out_dir = f"../out/{name}"
-md = "../md"
-
-
+out_dir = f"./out/test/{name}"
+md = "./md"
 
 env = Environment(md=md, out_dir=out_dir)
 

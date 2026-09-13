@@ -6,9 +6,9 @@ print(os.getcwd())
 ticker = "QQQ"
 name = "Index_BuyAndHold"
 from_date = "2000-01-01"
-out_dir = r"../out/index_buy_hold"
+out_dir = r"./out/test"
 
-env = Environment(md=r"../md", out_dir=out_dir)
+env = Environment(md=r"./md", out_dir=out_dir)
 entry_signal = AlwaysOnSignal()
 exit_signal = None
 risk_management = NoRiskManagement()
