@@ -1,17 +1,9 @@
 # Backfire - quantitative stock investing strategy research engine. 
 
 ## Setup
-
-The project is managed with [uv](https://docs.astral.sh/uv/). Python 3.13 is pinned in
-`.python-version`; uv downloads it automatically.
-
 ```
 uv sync                                    # create .venv and install everything (incl. dev group)
 ```
-
-`uv.lock` is committed — `uv sync` reproduces the exact environment. Notebook and plotting
-packages (jupyterlab, plotly, matplotlib) live in the `dev` dependency group; the `backfire`
-package itself only needs pandas/numpy/pandas-datareader.
 
 ## Project Goals and Overview
 Backfire is a quantitative stock investing strategy research engine. 
@@ -20,7 +12,7 @@ Agents, visualization notebooks and dashboards use common tools and their result
 
 The goal is answering questions such as: 
 - what risk, return and individual trades would a strategy generate from Jan 2019 to July 2026?
-- analyze the results: when/how did the strategy make money/lose money (few/many winning trades vs. many/few winning trades, one big win/loss driving the results) trade holding periods.
+- analyze the results: when/how did the strategy make money/lose money (few/many winning trades vs. many/few losing trades, one big win/loss driving the results) trade holding periods.
 - would changing strategy parameter or rule result in better or worse outcome? 
 - what is the optimal set of parameters for this strategy? 
 - what are the weaknesses of this strategy, e.g. dependency on one big winning trade, sensitivity to slippage (trading at opening price)
@@ -138,8 +130,7 @@ The strategy simulation takes the following parameters:
   - start date, end date
   - underlying (ticker)
   - strategy definition (yaml file with command line overrides)
-  - initial portfolio size (USD) 
-  - persistent_output_root ("" means no persistent output)
+  - out : persistent output folder ("" means no persistent output)
 
 In the simulation, the strategy starts with a certain portfolio size in cash, executes its rules over the trading period and closes all positions at the end of the trading period.  
 
@@ -152,11 +143,11 @@ Performance statistics/metrics:
 - average losing trade loss: L_avg (e.g., -0.33).
 - R: W_avg / abs(L_avg), reported as NA if L_avg is zero.
 - max winning trade return: max_pnl_pcnt (e.g., 1.34).
-- min losing trade loss: min_pnl_pcnt (e.g., -0.98) (note defined as losing trade with smallest loss).
+- max losing trade loss: min_pnl_pcnt (e.g., -0.98) 
 - holding period: across all trades (hp_avg), over winning trades (hp_win), over losing trades (hp_loss). In business days.
 - absolute dollar profit/loss: over all trades (total_pnl), over winning trades (positive_pnl), over losing trades (negative_pnl)
 - return: (portfolio size after last trading day / initial portfolio size) - 1
-- compounded annualized gross return: CAGR calculated as power((portfolio_start/portfolio_end), 1/holding_period_in_years) - 1
+- compounded annualized growth rate: CAGR calculated as power((portfolio_end/portfolio_start), 1/holding_period_in_years) - 1
 - maximum realized drawdown: max_dd_pcnt_realized
 - maximum unrealized drawdown: max_dd_pcnt_unrealized
 
@@ -183,15 +174,6 @@ Signal files - for each signal a file with one row for every day in the trading 
 - signal value 
 - signal id
 
-### Experiments
-
-Every simulation run is given an experiment name which may contain a forward slash used to group experiments into groups, e.g. "index/vibha_jha_tqqq". Output is placed into directory experiments/'experiment_name', where the experiment name is first parsed and forward slashes are used as subdirectory indicators. The output directory contains information available to fully reconstruct the strategy and simulation parameters for later reruns. The output directory will contain files: 
-  - f"description_{experiment_name}.md": strategy name, strategy parameters, underlying, start/end dates
-  - f"stats_{experiment_name}.csv": performance metrics
-  - f"trades_{experiment_name}.csv": strategy trades
-  - f"pos_{experiment_name}.csv": strategy positions
-  - f"entry_{experiment_name}.csv": entry signal daily data
-  - f"entry_{experiment_name}.csv": exit signal daily data
 
 All dates in YYYY-MM-DD. All stock prices reported with two decimal places. All Pnl/gain/loss numbers with zero decimal places and comma at thousands. All percentages with two decimal places, e.g. 0.77 or -0.33. 
 
@@ -238,14 +220,14 @@ strategy:
     long_MA: 200 # days
   risk_management: 
     name: BasicRiskManagement
-      stop_loss: 0.07
-      take_profit: 0.25
-      trailing_stop_period: null
+    stop_loss: 0.07
+    take_profit: 0.25
+    trailing_stop_period: null
   position_management: 
     name: PositionManagement
-      initial_position: 100000
-      policy: fixed_fraction
-      fraction: 1.0      
+    initial_position: 100000
+    policy: fixed_fraction
+    fraction: 1.0      
 ```
 `uv run python src/backfire/backtest.py --start_date "2020-01-01" --end_date "2026-07-01" -md "md/daily" --underlying QQQ --strategy my_strategy.yaml --out "test/my_strategy"`
 

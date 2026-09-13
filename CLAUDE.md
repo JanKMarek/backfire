@@ -9,6 +9,9 @@ See README.md for:
 See docs/WORKITEMS.md for active backlog and work items
 
 ## Tooling
-- **Environment**: Python 3.13+, uv, jupyter notebooks, plotly charts/dashboards, pandas, LangChain and LLMs (Claude Fable/Opus)
+- **Environment**: Python 3.13+, uv, jupyter lab, plotly charts/dashboards, pandas, LangChain and LLMs (Claude Fable/Opus). 
+`uv.lock` is committed — `uv sync` reproduces the exact environment. Notebook and plotting
+packages (jupyterlab, plotly, matplotlib) live in the `dev` dependency group; the `backfire`
+package itself only needs pandas/numpy/pandas-datareader.
 - **Setup**: `uv sync`
 - **Issue tracking**: Github
