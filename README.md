@@ -1,4 +1,4 @@
-# Backfire 
+# Backfire - quantitative stock investing strategy research engine. 
 
 ## Setup
 
@@ -7,173 +7,260 @@ The project is managed with [uv](https://docs.astral.sh/uv/). Python 3.13 is pin
 
 ```
 uv sync                                    # create .venv and install everything (incl. dev group)
-uv run python test/test_base.py            # run a script in the environment
-uv run jupyter lab                         # notebooks
-uv add <package>                           # add a runtime dependency
-uv add --dev <package>                     # add a notebook/dev dependency
 ```
 
 `uv.lock` is committed — `uv sync` reproduces the exact environment. Notebook and plotting
 packages (jupyterlab, plotly, matplotlib) live in the `dev` dependency group; the `backfire`
 package itself only needs pandas/numpy/pandas-datareader.
 
-# May 26, 2025
+## Project Goals and Overview
+Backfire is a quantitative stock investing strategy research engine. 
 
-Backfire backtests strategies consisting of Entry and Exit signals and common risk management and 
-position management rules. 
+Agents, visualization notebooks and dashboards use common tools and their results to backtest, analyze and optimize stock investing and trading strategies.
 
-The backtest is performed on daily OHLCV data and emulates the action of a trader who evaluates the market state 
-in the evening, decides on actions and then executes the actions in the morning. 
+The goal is answering questions such as: 
+- what risk, return and individual trades would a strategy generate from Jan 2019 to July 2026?
+- analyze the results: when/how did the strategy make money/lose money (few/many winning trades vs. many/few winning trades, one big win/loss driving the results) trade holding periods.
+- would changing strategy parameter or rule result in better or worse outcome? 
+- what is the optimal set of parameters for this strategy? 
+- what are the weaknesses of this strategy, e.g. dependency on one big winning trade, sensitivity to slippage (trading at opening price)
+- how should this strategy be modified (parameters, rules of behaviour) to improve its performance? 
+- what risks are not mitigated in this strategy? 
+- how would a strategy behave on a synthetic/simulated market data scenario
 
-Entry signal: 
-Binary signal (True/False) that triggers either once (e.g., price crosses MA to the upside) or stays on 
-(e.g., price above MA). When the signal triggers, the strategy establishes position. The same 
-signal will not be reentered - i.e., if a position was exited (based on SL, TP, TS or ExitSignal), the position will 
-not be reentered until a new entry signal is triggered. A new signal will also not be entered as long as the exit 
-signal which caused it to be exited is in place. 
-Note that entry signal going from True to False does not mean exiting - only exit signal triggers position exit. Use
-negation of entry signal as exit signal if you need such behaviour. 
+The answers are based on quantified strategy risk and return metrics and simulation/backtest result analysis.  
 
-Exit signal: 
-Binary signal that can trigger once or stay on. When it triggers, it takes precedence over the entry signal and full 
-position is exited. When it goes off, the position may not be reentered on the same entry signal (strategy needs a new 
-entry signal to put on a position) and may not be reentered as long as an exit signal is on.
+## Application Domain 
 
-Risk management: 
-Backfire supports stop loss, take profit and trailing stop (based on MA), all specified as percentages
-of the underlying. If either of the three is triggered, the current position is closed in full and will not be
-reentered until a new entry signal is generated. 
+### What is a strategy
+A stock investing strategy is a set of rules for buying and selling an underlying stock market instrument(s).
 
-Position management: 
-Fixed Percentage: invest a percentage of the portfolio equity on entry, sell the entire positon on exit.  
-Gradual Exposure: as long as the same entry signal remains in place, the position size is increased as the 
-underlying appreciates based on a predefined schedule, e.g. 10% initially, add 5% on 5% up and add 5% on 10% up.
-The position will NOT be decreased as the underlying drops (exit is triggered by SL, TP, TS or exit signal). 
+The strategy logic simulates actions of a trader who checks the state of the market at the end of the day (and so has access to open, close, high and low prices of the underlyings for the current day), decides on actions (buy, sell, do nothing) and executes the actions at the beginning of the next day (executing at the Open price of the underlying the next day). 
 
-Memo on entry: 
-   bought:xxx shares:signal_name; 
-Memo on exit: 
-   sold:xxx shares:SL/TP/TS/exit_signal_name
+Underlying stock market instruments: 
+- index/sector ETFs (e.g., SPY, TQQQ, SOXL)
+- individual stocks (e.g., MU, ANET)
 
-Notes: 
-I am 
-not sure how adding and reducing positions will be handed here, for now the signal is simply True and False. 
+Strategy rules: 
+- **general overlay rules**: indicates strategy is inactive (a.k.a 'in cash', 'out of the market') or active (i.e., has positions in the market). General overlay rules may be market related (market in downtrend, market choppy) or strategy related (cool-off period after a period of losing trades)
+- **selection rules**: what underlying should the strategy buy/sell. 
+- **buy rules**: triggers that cause the strategy to buy the underlying. Examples: entry buy rule to establish the initial position in an underlying, add-on rule to add to a winning position. 
+- **sell rules**: triggers causing the strategy to sell the underlying. Examples of these are initial stoploss rules to limit losses on losing trades or profit taking rules to take profit in a trade (selling into strength while the underlying is still advancing or selling into weakness after the underlying has begun to decline)
+- **position size rules**: determine how much of the underlying (e.g., the number of shares or total dollar position size) should the strategy buy or sell.  
 
+We focus on long-only strategies (no shorting the underlying) and strategies making decisions based on end of the day prices (so no intraday trading). 
 
+All underlyings will be denominated in US Dollars (USD). 
 
+Here is an example of a strategy: 
+Strategy "Index 50d/200d MA Crossover". 
+- general overlay: none
+- selection rules: always buy/sell QQQ
+- buy rules: when 50d moving average (MA) crosses above 200d MA from below, buy QQQ
+- sell rules: when 50d MA drops below 200d MA, sell QQQ
+- position size rules: always buy/sell as much shares as you can (so spend all portfolio cash) 
 
+Another example of a strategy: 
+Strategy "CANSLIM Market Leader Breakout, Single Run": 
+- general overlay: general market in uptrend 
+- selection rules: select most promising market leader breaking out from a consolidation
+- buy rules: move above the pivot point on volume
+- sell rules: 
+  - initial stop loss: 7% below pivot point
+  - take profit rule (aka sell into strength): trade profit 25%+ and stock price 10%+ over the 21d MA
+  - retracement sell rule (aka sell on weakness): stock price closes below 21d MA
+- position size rules: buy shares for 20% of the portfolio equity
 
-
-# Nov 22, 2022
-Use Cases: 
-- Utilities for market data maintenance. This includes 'backfire.py get AAPL' and 'backfire.py update_all'.  
-- Signal visualization. Visualize signals such as Pocket Pivot, Buyable Gap Up, Distribution Days, Follow-thru Day etc. 
-  This will include coding up a subclass of Signal. The Signal is an object returning id (sequential id) and value (-1 .. 1). 
-  Signals are visualized by running the VisualizeSignal notebook - the notebook will graph out the signal along with the underlying.  
-
-
-# Nov 7, 2022
-Three work items: 
-- don't enter the signal once it has been stopped out.
-- make sure exit and risk mgmt signals override the entry signal
-- implement partial positions based on strength of signal
-
-## Motivation
-
-One approach to investing in growth stocks is to identify stocks most likely to go up, buy them as they are beginning
-their run and before they get overextended, and then sell them into strength or on the growth dissipating. Such 
-strategies generally work best in market uptrends. 
-
-Several such strategies are described in books by Zweig, O'Neil, Weinstein, Minervini, Boucher and others - they select
-stocks based on the combination of price and volume action (breaking out into an uptrend) and fundamental growth factors 
-(e.g., accelerating growth). The entry and exit points are then driven by technical factors - enter on breakout from 
-consolidation or other technical setups, sell on signs of weakness or overextension.
-
-These strategies rely on a market indicator which detects the state of the market (uptrend, downtrend, rangebound). These
-indicators are based on price and volume of the market action. The strategies are generally fully invested in uptrends 
-and in cash during downtrends. 
-
-I want to be able to backtest the performance of these strategies in different market periods.  
-
-Backfire is a backtesting framework which will help me answwer the following questions:  
-- do the signals and strategies described in the above books really work when backtested in realistic scenarios? 
-- is it better to concentrate on shorter runups and trade more frequently (Minervini-style) or on larger runups
-    and hold for longer periods of time (CANSLIM-style)? 
-- what happens if I vary strategy parameters (e.g., take profit threshold, signal parameters)? What set of 
-    parameters is compatible with CIBC 15 day mandatory holding period?
-- how do different market indicators perform? 
-
-Aspirationally, I find the best indicators and parameters, I would like to have a screening tool which would, 
-on a weekly basis, allow me to identify stocks as they become candidates for entry and exit.  
-
-The goal would be: 
-    - code up a backtesting framework simulating a real-life strategy (daily data, exit as per books)
-    - code up indicators used in the above strategies - CANSLIM indicators, Minervini indicators, Boucher 
-    - run backtests on all software and technology stocks to determine how plausible these strategies are 
-    - code up an automated screening tool identifying stocks for the best strategy
-
-## Description
-
-Backfire is a stock trading strategy backtesting framework. The framework simulates actions of a trader who uses daily data and 
-looks at the markets twice: in the evening, the trader evaluates the market situation and decides on the trading 
-actions next day, and then executes the trading actions next morning at the opening prices.
-
-The simulated trading strategy uses two signals - entry and exit signals - and supports configurable risk management 
-and position management logic. The strategy enters a position whenever the entry signal is triggered (signal is evaluated 
-at the end of the day, trading action is executed the next morning at the opening prices) and exits the position whenever 
-either the exit or the risk management signals are triggered (again, both exit and risk management signals are 
-evaluated at the end of the day and sell actions are executed the next morning). The strategy generates 
-data for visualization of its behaviour and signals, as well as the set of trades and trading performance statistic.
-
-## Supported Scenarios
-
-Strategy has: 
-- entry signal (evaluated at end of day)
-- exit signal (evaluated at end of day) 
-- risk management (exit position due to loss exceeding stop loss)
-- position management (fixed amount, fixed proportion) 
-- market situation overlay 
-
-Strategy can handle the following scenarios: 
-- O'Neill CANSLIM trade with simple entry/exit. Entry on pattern (entry signal fires once) but only when the market is on (overlay stays on and off, so 
-  need index data as well), exit on one of o/e or weakness (exit signal fires once). Risk mgmt fires on loss > 7% (fires once). 
-  If risk mgmt and entry clash, entry wins. 
-- Buy and Hold a ticker. entry=AlwaysOn or a signal that fires one, exit=AlwaysOff, rm=None, pos_mgmt=fixed_amount, overlay=None
-- Hold Index with Risk Overlay. 
-- Buy/Sell based on a single signal. 
-- Buy/Sell based on a single signal, with risk management overlay. 
-- ONeil with pyramiding.   
-- Minervini trade. Splitting exits, 
-- 
-
-And so: 
-- Entry signal that can fire once
-- 
+And yet another example: 
+Strategy "Vibha Jha TQQQ index strategy": 
+- general overlay: none
+- selection rules: always buy/sell TQQQ
+- buy rules: on Follow-Through Day or three Higher Highs/Higher Lows after QQQ consolidation of 8%-10% over at least four weeks
+- sell rules: 
+  - initial stop loss: QQQ closes below the First Day of Rally low of the day
+  - strength take profit rule: trade profit 25%+ AND QQQ 10% over the 21d MA
+  - weakness take profit rule: QQQ closes below 21d MA for two days in a row
+- position size: 
+  - buy TQQQ shares for 50% of the portfolio equity
 
 
+### Strategy evaluation
+
+Strategy evaluation is the process of comparing strategy performance to its objectives and constraints and identifying any red flags: 
+
+Strategy Objective: 
+  - total return over trading period
+  - CAGR (compounded annualized growth rate)
+  - Calmar ratio (CAGR / MaxDrawdown)
+  - Sharpe ratio
+
+Constraints: any of the following 
+- maximum drawdown (realized, unrealized) 
+- time in drawdown
+- number of trades or average trade holding period
+
+Identifying red flags: 
+- many small losing trades offset by very few big winning trades (dependency on single/few big wins) 
+- very large maximum losing trade
+- too many trades, holding period too short
+- sensitivity to slippage (e.g., execution on opening price vs. execution on price on open+15min) 
+- sensitivity to small parameter changes (overfitting) 
+- presence of unmitigated risks
+- long periods of time spent in drawdown (emotional impact)
+
+Positive traits: 
+- can be leveraged
+
+Visual Inspection of strategy performance is also helpful. We chart the underlying over the trading period overlaid with: 
+- strategy actions (buys/sells) 
+- strategy unrealized PnL
+- signal values (entry, exit, general market)
+
+### Strategy Structure
+To simplify reasoning about strategies and strategy analysis, it is useful to construct a strategy from signals and common rules:  
+- **general market overlay signal**: signal calculated from general market averages (e.g., SPY or QQQ indexes) which indicates the level of exposure the strategy should be taking on.
+- **entry signal**: Binary signal (True/False) that triggers either once (e.g., price crosses MA to the upside) or stays on (e.g., price above MA). When the signal triggers, the strategy establishes position. The same signal will not be reentered - i.e., if a position was exited (based on SL, TP, TS or ExitSignal), the position will not be reentered until a new entry signal is triggered. A new signal will also not be entered as long as the exit signal which caused it to be exited is in place. Note that entry signal going from True to False does not mean exiting - only exit signal triggers position exit. Use negation of entry signal as exit signal if you need such behaviour. 
+- **exit signal**: Binary signal that can trigger once or stay on. When it triggers, it takes precedence over the entry signal and full position is exited. When it goes off, the position may not be reentered on the same entry signal (strategy needs a new entry signal to put on a position) and may not be reentered as long as an exit signal is on.
+- **risk management rules**: 
+  - stop loss rule: when in position and trade loss exceeds a threshold, close the position and do not act until a new entry signal is triggered
+  - trailing stop rule: when price falls back below a threshold (e.g., 21d MA or -10%), close the position and do not act until a new entry signal is triggered
+  - take profit rule: when in position and trade gain exceeds a threshold, close the position and do not act antil a new entry signal is triggered
+- **position size management rules**: 
+    - Fixed Fraction: invest a percentage of the portfolio equity on entry, sell the entire positon on exit.  
+    - Gradual Exposure: as long as the same entry signal remains in place, the position size is increased as the underlying appreciates based on a predefined schedule, e.g. 10% initially, add 5% on 5% up and add 5% on 10% up. The position will NOT be decreased as the underlying drops (exit is triggered by SL, TP, TS or exit signal). 
+
+All signals have values between 0 (no signal) to 1 (maximum signal strength). 
+
+
+### Simulating/backtesting strategy execution 
+
+The strategy simulation takes the following parameters: 
+  - start date, end date
+  - underlying (ticker)
+  - strategy definition (yaml file with command line overrides)
+  - initial portfolio size (USD) 
+  - persistent_output_root ("" means no persistent output)
+
+In the simulation, the strategy starts with a certain portfolio size in cash, executes its rules over the trading period and closes all positions at the end of the trading period.  
+
+The simulation framework generates performance statistics, list of trades, daily file and signal files: 
+
+Performance statistics/metrics: 
+- number of trades: total (N_total), winning (N_win), losing (N_loss).
+- winning trade percentage: N_win / N_total.
+- average winning trade gain: W_avg (e.g., 0.24).
+- average losing trade loss: L_avg (e.g., -0.33).
+- R: W_avg / abs(L_avg), reported as NA if L_avg is zero.
+- max winning trade return: max_pnl_pcnt (e.g., 1.34).
+- min losing trade loss: min_pnl_pcnt (e.g., -0.98) (note defined as losing trade with smallest loss).
+- holding period: across all trades (hp_avg), over winning trades (hp_win), over losing trades (hp_loss). In business days.
+- absolute dollar profit/loss: over all trades (total_pnl), over winning trades (positive_pnl), over losing trades (negative_pnl)
+- return: (portfolio size after last trading day / initial portfolio size) - 1
+- compounded annualized gross return: CAGR calculated as power((portfolio_start/portfolio_end), 1/holding_period_in_years) - 1
+- maximum realized drawdown: max_dd_pcnt_realized
+- maximum unrealized drawdown: max_dd_pcnt_unrealized
+
+List of trades executed by the strategy. For each trade: 
+- trade_number: trade number
+- ticker: underlying
+- entry_date
+- entry_price
+- shares: number of shares bought or sold
+- exit_date
+- exit_price
+- memo:  string. For instance, Memo on entry "bought:xxx shares:entry_signal_name", Memo on exit "sold:xxx shares:SL/TP/TS/exit_signal_name"
+- pnl: dollar return on the trade
+- pnl_pcnt: return on the trade calculated as (exit_price / entry_price) - 1
+- hp: holding period in business days
+
+Daily file - for every day in the trading period: 
+- Date
+- O,H,L,C,V prices
+- es,es_id,xs,pos,cash,action,delta_shares,memo,buy_price,trailing_stop,balance,unrealized_CumMax,unrealized_dd,unrealized_dd_pcnt
+
+Signal files - for each signal a file with one row for every day in the trading period: 
+- Date
+- signal value 
+- signal id
+
+### Experiments
+
+Every simulation run is given an experiment name which may contain a forward slash used to group experiments into groups, e.g. "index/vibha_jha_tqqq". Output is placed into directory experiments/'experiment_name', where the experiment name is first parsed and forward slashes are used as subdirectory indicators. The output directory contains information available to fully reconstruct the strategy and simulation parameters for later reruns. The output directory will contain files: 
+  - f"description_{experiment_name}.md": strategy name, strategy parameters, underlying, start/end dates
+  - f"stats_{experiment_name}.csv": performance metrics
+  - f"trades_{experiment_name}.csv": strategy trades
+  - f"pos_{experiment_name}.csv": strategy positions
+  - f"entry_{experiment_name}.csv": entry signal daily data
+  - f"entry_{experiment_name}.csv": exit signal daily data
+
+All dates in YYYY-MM-DD. All stock prices reported with two decimal places. All Pnl/gain/loss numbers with zero decimal places and comma at thousands. All percentages with two decimal places, e.g. 0.77 or -0.33. 
+
+
+### Market data 
+Market data is provided in the OHLCV format - open, high, low, close and volume. 
 
 
 
-Statistics: cagr, max DD, p, avgW, avgL, avgHpW, avgHpL, #trades
-Visualization: equity curve (with underlying), trade histogram, time chart of entry and exit sigansl (with underlying) 
 
-## Worklist
+## Architecture and Design decisions
 
-To-do list: 
-- code backtest tool supporting entry and exit indicators, risk management with trailing stop and fixed positon size
-- code MarketState indicators, plus CupAndHandle, PullbackBreakout, FlatBaseBreakout, Breakdown indicators
-- backtest O'Neil strategy on the set of software/technology stocks 
-- code Minervini's Stage2, VCP and Minervini breakout, Violations exit strategies
-- backtest Minervini's strategies
+### Components and Interfaces
 
-## Issues
-- SDS: when an entry signal is used in conjunction with risk management, risk mgmt may stop a position out yet 
-  reenter on the next day since the entry signal is still in force. 
-- Add Nasdaq data on the secondary axis for relative strength calculations? 
-- relative strenth - w.r.t nasdaq
+- load_ohlcv: This module obtains data from the data source (currently yahoo finance only), caches it for later use and returns it in a dataframe with defined columns. 
 
-## Miscellaneous
-- run notebooks with `uv run jupyter lab` (see Setup at the top)
+- Strategy composed of signals is implemented as class SignalDrivenStrategy. An instance of this class is configured with appropriate instances of entry and exit signals and risk management and position size rules. Signals are implemented as subclasses of class Signal. Each signal value is given a signal id which is important when we do not want to act on the same signal once stopped out, for instance. Common risk management rules are implemented in BasicRiskManagement and position management rules in PositionManagement. The strategy's _run method generates two tables - one with trades generated, the other one with prices, signals and equity curve. 
+
+- Evaluator class computes evaluation metrics.  
+
+- Method Strategy.backtest encapsulates the entire process of a backtest run - load market data, generate signals, generate trades, evaluate statistics, save evaluation data to experiment output files and return evaluation data to the caller. 
+
+- Visualization tools use Jupyter notebooks or Plotly dashboards and consume the evaluation data generated by the Strategy.backtest method. 
+
+- AI agents use skills which encapsulate the load_ohlcv and the Strategy.backtest methods. 
+
+- Optimization utilities use the load_ohlcv and Strategy.backtest methods. 
+
+
+## CLI Workflows
+
+- Backtesting a strategy: 
+
+```yaml
+strategy: 
+  name: ShortMAVsLongMA
+  entry_signal: 
+    name: ShortMAAboveLongMA
+    short_MA: 50 # days
+    long_MA: 200 # days
+  exit_signal: 
+    name: ShortMABelowLongMA
+    short_MA: 50 # days
+    long_MA: 200 # days
+  risk_management: 
+    name: BasicRiskManagement
+      stop_loss: 0.07
+      take_profit: 0.25
+      trailing_stop_period: null
+  position_management: 
+    name: PositionManagement
+      initial_position: 100000
+      policy: fixed_fraction
+      fraction: 1.0      
+```
+`uv run python src/backfire/backtest.py --start_date "2020-01-01" --end_date "2026-07-01" -md "md/daily" --underlying QQQ --strategy my_strategy.yaml --out "test/my_strategy"`
+
+- Running visualizatino notebooks: 
+`uv run jupyter lab`
+
+- Run fast unit tests
+`uv run pytest tests/unit -q`
+
+- Run full test suite
+`uv run pytest tests -q`
+
+
+
+
 
 
 
