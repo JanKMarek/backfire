@@ -149,6 +149,9 @@ Performance statistics/metrics:
 - compounded annualized growth rate: CAGR calculated as power((portfolio_end/portfolio_start), 1/holding_period_in_years) - 1
 - maximum realized drawdown: max_dd_pcnt_realized
 - maximum unrealized drawdown: max_dd_pcnt_unrealized
+- maximum time in drawdown: max_time_in_dd, the longest stretch in calendar days that the daily mark to market balance spends below a previous high water mark - measured from the day the mark was set to the last day before the balance recovers it, or to the last trading day if it never does.
+- Sharpe ratio: sharpe, the mean of the daily mark to market returns over their standard deviation, annualized by sqrt(252). Measured against a zero risk free rate, so it is comparable across runs but not against a published Sharpe. Reported as NA if the balance never moves.
+- Calmar ratio: calmar, CAGR / max_dd_pcnt_unrealized. Reported as NA if the strategy never drew down.
 
 List of trades executed by the strategy. For each trade: 
 - trade_number: trade number

@@ -12,7 +12,12 @@ from backfire.backtest import (
     main,
     run_backtest,
 )
-from backfire.base import BasicRiskManagement, Environment, PositionManagement
+from backfire.base import (
+    BasicRiskManagement,
+    Environment,
+    Evaluator,
+    PositionManagement,
+)
 from backfire.signals import ShortMAAboveLongMA, ShortMABelowLongMA
 
 STRATEGY = """
@@ -183,6 +188,68 @@ def test_a_period_without_trades_evaluates_to_na(md):
     assert len(trades) == 0
     assert stats['no_trades'] == 0
     assert "NA" in format_stats(stats)
+    # a balance that sat in cash never moved and never drew down
+    assert pd.isna(stats['sharpe'])
+    assert pd.isna(stats['calmar'])
+    assert stats['max_time_in_dd'] == 0
+
+
+def evaluate(balances, trades=(), from_date=date(2020, 1, 1), to_date=date(2021, 12, 31),
+             initial_position=100_000):
+    """
+        Runs the Evaluator over a hand written mark to market balance curve, one balance per
+        consecutive calendar day, and over trades given as (shares, entry_price, exit_price).
+        The balance is held entirely in cash, so 'pos' and 'C' do not enter the metrics.
+    """
+    positions = pd.DataFrame(
+        {'cash': [float(b) for b in balances], 'pos': 0.0, 'C': 0.0},
+        index=pd.date_range(from_date, periods=len(balances), freq='D'))
+    trades = pd.DataFrame.from_records(
+        [{'entry_date': pd.Timestamp(from_date), 'entry_price': entry, 'shares': shares,
+          'exit_date': pd.Timestamp(to_date), 'exit_price': exit_price}
+         for shares, entry, exit_price in trades],
+        columns=['entry_date', 'entry_price', 'shares', 'exit_date', 'exit_price'])
+    stats, _ = Evaluator().evaluate_trades(trades, positions, initial_position,
+                                           from_date, to_date)
+    return stats
+
+
+def test_max_time_in_dd_is_the_longest_stretch_below_a_high_water_mark():
+    # the Jan 2 peak of 110 stands under water from Jan 3 until it is recovered on Jan 8;
+    # the shallower dip after the Jan 8 peak of 120 lasts a single day and must not win
+    stats = evaluate([100, 110, 105, 100, 95, 108, 107, 120, 119, 121])
+
+    assert stats['max_time_in_dd'] == 5
+
+
+def test_a_strategy_still_under_water_is_measured_up_to_the_last_day():
+    stats = evaluate([100, 120, 110, 105, 104])
+
+    assert stats['max_time_in_dd'] == 3
+
+
+def test_a_strategy_that_keeps_making_new_highs_spends_no_time_in_drawdown():
+    stats = evaluate([100, 110, 120, 130])
+
+    assert stats['max_time_in_dd'] == 0
+
+
+def test_sharpe_annualizes_the_daily_mark_to_market_returns():
+    # daily returns of 0.10, 0.10 and 0.00: mean 1/15, sample stdev 1/sqrt(300),
+    # so sqrt(252) * mean / stdev = 18.33
+    stats = evaluate([100, 110, 121, 121])
+
+    assert stats['sharpe'] == 18.33
+
+
+def test_calmar_is_the_cagr_per_unit_of_the_deepest_drawdown():
+    # one trade turning 100,000 into 121,000 over two years is a CAGR of 0.10, and the
+    # balance curve gives back 25,000 of its 125,000 peak for a max drawdown of 0.20
+    stats = evaluate([100_000, 125_000, 100_000, 121_000], trades=[(1000, 100, 121)])
+
+    assert stats['cagr'] == 0.10
+    assert stats['max_dd_pcnt_unrealized'] == 0.20
+    assert stats['calmar'] == 0.50
 
 
 def test_stats_are_formatted_per_the_reporting_conventions():

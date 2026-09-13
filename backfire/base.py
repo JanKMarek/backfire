@@ -5,6 +5,10 @@ import pandas as pd
 import numpy as np
 import pandas_datareader as pdr
 
+# Trading days in a year, used to annualize metrics computed over the daily equity curve.
+_TRADING_DAYS_PER_YEAR = 252
+
+
 class Environment:
     """
       Represents the backtesting environment:
@@ -546,6 +550,10 @@ class Evaluator:
     """
         Evaluates a set of trades. Trades are contained in a dataframe with columns:
                entry_date, shares, entry_price, exit_date, exit_price
+
+        Trade level metrics are derived from the trades, the risk adjusted ones (drawdowns,
+        time in drawdown, Sharpe, Calmar) from the daily mark to market balance held in
+        'positions', so that they account for the open position and not only for closed trades.
     """
 
     def evaluate_trades(self, trades, positions, initial_position, from_date, to_date):
@@ -586,7 +594,9 @@ class Evaluator:
         stats['rtn'] = round(rtn, 2)
         tim = to_date - from_date
         stats["time_span"] = tim
-        stats['cagr'] = round(math.pow(rtn, 365 / tim.days) - 1, 2)
+        # keep the unrounded CAGR, the Calmar ratio below divides by a small number
+        cagr = math.pow(rtn, 365 / tim.days) - 1
+        stats['cagr'] = round(cagr, 2)
 
         # Max Drawdown - Realized
         equity = trades.pnl.cumsum().to_frame()
@@ -602,7 +612,27 @@ class Evaluator:
         positions['unrealized_CumMax'] = positions.balance.cummax()
         positions['unrealized_dd'] = positions.unrealized_CumMax - positions.balance
         positions['unrealized_dd_pcnt'] = positions.unrealized_dd / positions.unrealized_CumMax
-        stats['max_dd_pcnt_unrealized'] = round(positions.unrealized_dd_pcnt.max(), 2)
+        max_dd = positions.unrealized_dd_pcnt.max()
+        stats['max_dd_pcnt_unrealized'] = round(max_dd, 2)
+
+        # Max time in drawdown: the longest stretch, in calendar days, that the mark to market
+        # balance spends below a previous high water mark - from the day the mark was set to
+        # the last day before the balance recovers it, or to the last trading day if it never
+        # does. A strategy that keeps making new highs spends no time in drawdown.
+        days = pd.Series(pd.to_datetime(positions.index), index=positions.index)
+        at_high_water_mark = positions.balance >= positions.unrealized_CumMax
+        stats['max_time_in_dd'] = (days - days.where(at_high_water_mark).ffill()).max().days
+
+        # Sharpe ratio over the daily mark to market returns, annualized and measured against
+        # a zero risk free rate. Undefined for a balance that never moves (e.g. no trades).
+        daily_rtn = positions.balance.pct_change().dropna()
+        volatility = daily_rtn.std()
+        stats['sharpe'] = (round(math.sqrt(_TRADING_DAYS_PER_YEAR) * daily_rtn.mean() / volatility, 2)
+                           if volatility > 0 else np.nan)
+
+        # Calmar ratio: CAGR per unit of the deepest drawdown endured to earn it. Undefined
+        # for a strategy that never drew down.
+        stats['calmar'] = round(cagr / max_dd, 2) if max_dd > 0 else np.nan
 
         stats = pd.Series(name="stats", data=stats)
         return stats, trades

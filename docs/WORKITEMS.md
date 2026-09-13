@@ -1,7 +1,4 @@
 # Workitems
-- fix remaining README inconsistencies
-- implement backtest.py (yaml strategy defn, encapsulate Strategy.backtest)
-- add Sharpe ratio, Calmar ratio and max time in drawdown statistics 
 - implement plotly dashboard for reviewing results of a strategy
 - implement claude skills encapsulating backtest and analyze strategy
 - implement strategy analysis agent
