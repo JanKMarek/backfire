@@ -1,0 +1,19 @@
+strategy:
+  name: power_trend
+  entry_signal:
+    name: MWPowerTrend
+    short_MA: 50 # days
+    long_MA: 200 # days
+  exit_signal:
+    name: ReverseSignal (mw power trend)
+    entry_signal: ??? 
+  risk_management:
+    name: BasicRiskManagement
+    stop_loss: 0.07
+    take_profit: 0.25
+    trailing_stop_period: null
+  position_management:
+    name: PositionManagement
+    initial_position: 100000
+    policy: fixed_fraction
+    fraction: 1.0

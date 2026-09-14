@@ -1,0 +1,14 @@
+strategy:
+  name: stage2
+  entry_signal:
+    name: Stage2Signal
+  risk_management:
+    name: BasicRiskManagement
+    stop_loss: 0.07
+    take_profit: 0.25
+    trailing_stop_period: null
+  position_management:
+    name: PositionManagement
+    initial_position: 100000
+    policy: fixed_fraction
+    fraction: 1.0

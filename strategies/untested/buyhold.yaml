@@ -1,0 +1,6 @@
+strategy:
+  name: BuyHold
+  entry_signal:
+    name: AlwaysOnSignal
+  risk_management:
+    name: NoRiskManagement

@@ -1,0 +1,19 @@
+strategy:
+  name: gradual_exposure
+  entry_signal:
+    name: ShortMAAboveLongMA
+    short_MA: 50 # days
+    long_MA: 200 # days
+  exit_signal:
+    name: ShortMABelowLongMA
+    short_MA: 50 # days
+    long_MA: 200 # days
+  risk_management:
+    name: BasicRiskManagement
+    stop_loss: 0.07
+    take_profit: 0.25
+    trailing_stop_period: null
+  position_management:
+    name: GradualExposure
+    initial_position: 100000
+    schedule: {0: 0.1, 0.03: 0.05, 0.05: 0.05}
