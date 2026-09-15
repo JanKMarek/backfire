@@ -1,9 +1,7 @@
 # Backfire - quantitative stock investing strategy research engine. 
 
-## Setup
-```
-uv sync                                    # create .venv and install everything (incl. dev group)
-```
+
+
 
 ## Project Goals and Overview
 Backfire is a quantitative stock investing strategy research engine. 
@@ -225,7 +223,15 @@ Market data is provided in the OHLCV format - open, high, low, close and volume.
 
 ## CLI Workflows
 
-- Backtesting a strategy: 
+### Setup
+```
+git clone https://github.com/JanKMarek/backfire.git
+uv sync                                    # create .venv and install everything (incl. dev group)
+```
+Run all commands from the repository root. 
+
+
+### Backtesting a strategy: 
 
 ```yaml
 strategy: 
@@ -273,19 +279,19 @@ dotted from the root of the file and the value is read as YAML, so types are pre
 
 `--out ""` (the default) runs the backtest without writing any persistent output.
 
-- Visualizing strategy results
+### Visualizing strategy results
 
-Command `uv run python backfire/visualize.py -out "out/test/Index_50dMAvs200dMA` launches the web server; point browser at http://127.0.0.1:8050/ to view the dashboard. 
+Command `uv run python backfire/visualize.py -out "out/test/Index_50dMAvs200dMA"` launches the web server; point browser at http://127.0.0.1:8050/ to view the dashboard. The dashboard reads the CSV files the backtest wrote into the `--out` folder; it does not re-run the backtest. `--host` and `--port` override the default `127.0.0.1:8050`, and `--debug` runs the Dash development server with the reloader and the in-browser error pane.
 
 
 
-- Running visualization notebooks: 
+### Running visualization notebooks: 
 `uv run jupyter lab`
 
-- Run fast unit tests
+### Run fast unit tests
 `uv run pytest test/unit -q`
 
-- Run full test suite
+### Run full test suite
 `uv run pytest test -q`
 
 

@@ -1,3 +1,14 @@
+# September 14, 2026
+
+Added `backfire/visualize.py`, a Plotly Dash dashboard that reads the CSV files a backtest run
+wrote into its output folder and serves an interactive view over them - it never re-runs the
+backtest. The dashboard has a header with the strategy, the backtest period, the total return,
+the CAGR and the three largest drawdowns; a chart pane plotting the strategy's daily balance, the
+underlying OHLC, the entry/exit signal regimes as translucent bands and the executed trades as
+markers; and a monthly/annual returns table where clicking a cell highlights the start and end of
+that period on the chart. Launch with `uv run python backfire/visualize.py -out <run folder>` and
+open http://127.0.0.1:8050/.
+
 # May 26, 2025
 
 Backfire backtests strategies consisting of Entry and Exit signals and common risk management and 

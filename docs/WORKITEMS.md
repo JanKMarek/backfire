@@ -1,6 +1,6 @@
 # Workitems
-- implement plotly dashboard for reviewing results of a strategy
 - implement claude skills encapsulating backtest and analyze strategy
+- trade PnL histogram into the visualization tool
 - implement strategy analysis agent
 - experiment with strategy analysis agent on 50dVS200dMACrossover strategy
 - implement vibha jha's TQQQ strategy

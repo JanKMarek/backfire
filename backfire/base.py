@@ -175,6 +175,15 @@ class BasicRiskManagement():
                  stop_loss=None, # 0.07 means 7%
                  take_profit=None, # 0.2 is 20%
                  trailing_stop_period=None): # in days
+        for param_name, value in (("stop_loss", stop_loss),
+                                   ("take_profit", take_profit),
+                                   ("trailing_stop_period", trailing_stop_period)):
+            if value is not None and not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"BasicRiskManagement.{param_name} must be a number or YAML null, "
+                    f"got {value!r}. Use 'null' (or '~') for 'no value' in YAML, not "
+                    f"'$null', which YAML parses as the string '$null'.")
+
         self.stop_loss = stop_loss
         self.take_profit = take_profit
         self.trailing_stop_period = trailing_stop_period
