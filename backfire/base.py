@@ -127,34 +127,6 @@ class Signal:
         # return dataframe indexed on date with at least one column 'es' containing True/False
         pass
 
-class AlwaysOnSignal(Signal):
-    def __init__(self):
-        super().__init__("AlwaysOnSignal")
-
-    def _call_impl(self, ohlcv):
-        rv = pd.DataFrame(index=ohlcv.index)
-        rv['es'] = True
-        return rv
-
-class AlwaysOffSignal(Signal):
-    def __init__(self):
-        super().__init__("AlwaysOffSignal")
-
-    def _call_impl(self, ohlcv):
-        rv = pd.DataFrame(index=ohlcv.index)
-        rv['es'] = False
-        return rv
-
-class ReverseSignal(Signal):
-    def __init__(self, signal):
-        super().__init__(f"ReverseSignal_{signal.name}")
-        self.signal = signal
-
-    def _call_impl(self, ohlcv):
-        rv = self.signal(ohlcv)
-        rv['es'] = ~rv.es
-        return rv
-
 class BasicRiskManagement():
     """
        Implements three common risk/profit management techniques:
@@ -309,11 +281,12 @@ class SignalDrivenStrategy(StrategyInterface):
     def __init__(self,
                  env,
                  entry_signal,
-                 exit_signal=AlwaysOffSignal(),
+                 exit_signal=None,
                  risk_management=NoRiskManagement(),
                  position_management=PositionManagement(),
                  name=None,
                  save_signals=True):
+        from .signals import AlwaysOffSignal
         self._env = env
         self.entry_signal = entry_signal
         self.exit_signal=AlwaysOffSignal() if exit_signal is None else exit_signal

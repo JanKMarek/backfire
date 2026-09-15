@@ -1,7 +1,7 @@
 strategy:
   name: vibha_jha
   entry_signal:
-    name: consecurityHigherHighsLows
+    name: ConsecutiveHigherHighsLows
     consecurity_days: 3
   exit_signal:
     name: ShortMABelowLongMA

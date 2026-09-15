@@ -233,6 +233,8 @@ Run all commands from the repository root.
 
 ### Backtesting a strategy: 
 
+Create a yaml strategy definition (see strategies directory for examples): 
+
 ```yaml
 strategy: 
   name: ShortMAVsLongMA
@@ -255,6 +257,9 @@ strategy:
     policy: fixed_fraction
     fraction: 1.0      
 ```
+
+Run the backtest: 
+
 `uv run python backfire/backtest.py --start_date "2020-01-01" --end_date "2026-07-01" -md "md" --underlying QQQ --strategy strategies/ma_crossover.yaml --out "out/my_strategy"`
 
 The strategy file names the component classes and their constructor arguments. Any Signal,
@@ -272,6 +277,23 @@ optional and fall back to the strategy defaults. An argument that is itself a ma
       long_MA: 200
 ```
 
+A combinator taking any number of signals, such as `OrSignal` (on whenever at least one of its
+signals is on), is given a list of them:
+
+```yaml
+  exit_signal:
+    name: OrSignal
+    signals:
+      - name: ShortMABelowLongMA
+        short_MA: 50
+        long_MA: 200
+      - name: BreakBelowMA
+        period: 20
+```
+
+To list all signals that can be named in the strategy yaml file, run: 
+`uv run python backfire/backtest.py --list_signals`
+
 Individual entries can be overridden per run without editing the strategy file - the path is
 dotted from the root of the file and the value is read as YAML, so types are preserved:
 
@@ -282,6 +304,9 @@ dotted from the root of the file and the value is read as YAML, so types are pre
 ### Visualizing strategy results
 
 Command `uv run python backfire/visualize.py -out "out/test/Index_50dMAvs200dMA"` launches the web server; point browser at http://127.0.0.1:8050/ to view the dashboard. The dashboard reads the CSV files the backtest wrote into the `--out` folder; it does not re-run the backtest. `--host` and `--port` override the default `127.0.0.1:8050`, and `--debug` runs the Dash development server with the reloader and the in-browser error pane.
+
+### Visualizing an individual signal
+
 
 
 

@@ -5,6 +5,61 @@ import pandas as pd
 
 from .base import Signal
 
+class AlwaysOnSignal(Signal):
+    def __init__(self):
+        super().__init__("AlwaysOnSignal")
+
+    def _call_impl(self, ohlcv):
+        rv = pd.DataFrame(index=ohlcv.index)
+        rv['es'] = True
+        return rv
+
+class AlwaysOffSignal(Signal):
+    def __init__(self):
+        super().__init__("AlwaysOffSignal")
+
+    def _call_impl(self, ohlcv):
+        rv = pd.DataFrame(index=ohlcv.index)
+        rv['es'] = False
+        return rv
+
+class ReverseSignal(Signal):
+    def __init__(self, signal):
+        super().__init__(f"ReverseSignal_{signal.name}")
+        self.signal = signal
+
+    def _call_impl(self, ohlcv):
+        rv = self.signal(ohlcv)
+        rv['es'] = ~rv.es
+        return rv
+
+class OrSignal(Signal):
+    """
+        Logical OR of any number of signals: on whenever at least one of the signals is on,
+        off otherwise. A signal value that is missing (NaN, e.g. during a warm up period)
+        counts as off.
+
+        The returned dataframe keeps every constituent's value in a column named after the
+        constituent, next to the combined 'es'.
+    """
+    def __init__(self, *signals):
+        if not signals:
+            raise ValueError("OrSignal needs at least one signal.")
+        for s in signals:
+            if not isinstance(s, Signal):
+                raise ValueError(f"OrSignal arguments must be signals, got {s!r}.")
+        super().__init__("OrSignal_" + "_or_".join(s.name for s in signals))
+        self.signals = signals
+
+    def _call_impl(self, ohlcv):
+        rv = pd.DataFrame(index=ohlcv.index)
+        rv['es'] = False
+        for s in self.signals:
+            value = s(ohlcv)['es'].reindex(rv.index).fillna(False).astype(bool)
+            rv[s.name] = value
+            rv['es'] = rv['es'] | value
+        return rv
+
 class ShortMAAboveLongMA(Signal):
     def __init__(self, short_MA, long_MA):
         super().__init__(f"{str(short_MA)}dMAAbove{str(long_MA)}MA")

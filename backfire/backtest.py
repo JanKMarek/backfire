@@ -42,6 +42,17 @@
           short_MA: 50
           long_MA: 200
 
+    A combinator taking any number of signals is given a list of them:
+
+      exit_signal:
+        name: OrSignal
+        signals:
+          - name: ShortMABelowLongMA
+            short_MA: 50
+            long_MA: 200
+          - name: BreakBelowMA
+            period: 20
+
     Individual entries can be overridden from the command line without editing the file:
 
       --set strategy.entry_signal.short_MA=20 --set strategy.risk_management.stop_loss=null
@@ -50,6 +61,7 @@
 import argparse
 import inspect
 import math
+import os
 import sys
 from datetime import datetime
 
@@ -113,14 +125,35 @@ def build_component(spec, catalog, kind):
         raise ValueError(f"Unknown {kind} '{class_name}'. "
                          f"Available: {', '.join(sorted(catalog))}")
 
-    # an argument that is itself a named mapping is a nested signal (e.g. ReverseSignal)
-    kwargs = {k: build_component(v, SIGNALS, 'signal') if isinstance(v, dict) and 'name' in v else v
-              for k, v in kwargs.items()}
+    # an argument that is itself a named mapping is a nested signal (e.g. ReverseSignal),
+    # a list of them a list of nested signals (e.g. OrSignal)
+    kwargs = {k: _build_nested_signals(v) for k, v in kwargs.items()}
+
+    # a list given under the name of the constructor's *args parameter supplies the
+    # positional arguments, so that 'signals: [...]' configures OrSignal(*signals)
+    cls = catalog[class_name]
+    args = ()
+    for param in inspect.signature(cls).parameters.values():
+        if param.kind is param.VAR_POSITIONAL and isinstance(kwargs.get(param.name), list):
+            args = tuple(kwargs.pop(param.name))
 
     try:
-        return catalog[class_name](**kwargs)
+        return cls(*args, **kwargs)
     except TypeError as e:
         raise ValueError(f"Cannot build {kind} '{class_name}': {e}") from e
+
+
+def _build_nested_signals(value):
+    """
+        Builds the nested signals in one constructor argument of a strategy file: a mapping
+        with a 'name' key becomes a signal, a list has each of its entries built the same way,
+        anything else is passed through unchanged.
+    """
+    if isinstance(value, dict) and 'name' in value:
+        return build_component(value, SIGNALS, 'signal')
+    if isinstance(value, list):
+        return [_build_nested_signals(v) for v in value]
+    return value
 
 
 def build_strategy(conf, env):
@@ -202,6 +235,10 @@ def run_backtest(strategy_conf, underlying, start_date, end_date=None, md="./md"
     :return: (strategy, price_and_signals, positions, trades, stats)
     """
     env = Environment(md=md, out_dir=out)
+    if env.out_dir:
+        # saved with overrides already applied, so it reflects what was actually run
+        with open(os.path.join(env.out_dir, "strategy.yaml"), "w") as f:
+            yaml.safe_dump(strategy_conf, f, sort_keys=False)
     strategy = build_strategy(strategy_conf, env)
     price_and_signals, positions, trades, stats = strategy.backtest(
         ticker=underlying, from_date=start_date, to_date=end_date)
@@ -227,6 +264,20 @@ def format_stats(stats):
     return "\n".join(lines)
 
 
+def format_catalog():
+    """
+        Renders the catalog of strategy components that can be named in a strategy file
+        (see SIGNALS, RISK_MANAGEMENTS, POSITION_MANAGEMENTS).
+    """
+    sections = [("Signals", SIGNALS), ("Risk managements", RISK_MANAGEMENTS),
+               ("Position managements", POSITION_MANAGEMENTS)]
+    lines = []
+    for title, catalog in sections:
+        lines.append(f"{title}:")
+        lines += [f"  {name}" for name in sorted(catalog)]
+    return "\n".join(lines)
+
+
 def _valid_date(value):
     try:
         datetime.strptime(value, "%Y-%m-%d")
@@ -239,27 +290,42 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(
         prog="backtest.py",
         description="Backtest a signal driven strategy over one underlying.")
-    p.add_argument("--start_date", required=True, type=_valid_date,
+    p.add_argument("--start_date", type=_valid_date,
                    help="first day of the trading period, YYYY-MM-DD")
     p.add_argument("--end_date", default=None, type=_valid_date,
                    help="last day of the trading period, YYYY-MM-DD "
                         "(default: the most recent market data available)")
     p.add_argument("-md", "--md", dest="md", default="./md",
                    help="market data directory (default: ./md)")
-    p.add_argument("--underlying", required=True,
+    p.add_argument("--underlying",
                    help="ticker the strategy trades, e.g. QQQ")
-    p.add_argument("--strategy", required=True,
+    p.add_argument("--strategy",
                    help="path to the strategy definition YAML file")
     p.add_argument("--out", default="",
                    help='output folder for the run; "" (the default) keeps no persistent output')
     p.add_argument("--set", dest="overrides", action="append", default=[], metavar="PATH=VALUE",
                    help="override one strategy file entry, e.g. "
                         "--set strategy.entry_signal.short_MA=20. Can be repeated.")
-    return p.parse_args(argv)
+    p.add_argument("--list_signals", action="store_true",
+                   help="list all strategy components (signals, risk managements and "
+                        "position managements) that can be named in a strategy file, then exit")
+
+    args = p.parse_args(argv)
+    if not args.list_signals:
+        required = [("--start_date", args.start_date), ("--underlying", args.underlying),
+                    ("--strategy", args.strategy)]
+        missing = [name for name, value in required if value is None]
+        if missing:
+            p.error(f"the following arguments are required: {', '.join(missing)}")
+    return args
 
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.list_signals:
+        print(format_catalog())
+        return 0
+
     try:
         conf = load_strategy_conf(args.strategy, args.overrides)
         strategy, _, _, trades, stats = run_backtest(

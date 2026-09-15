@@ -18,7 +18,7 @@ from backfire.base import (
     Evaluator,
     PositionManagement,
 )
-from backfire.signals import ShortMAAboveLongMA, ShortMABelowLongMA
+from backfire.signals import OrSignal, ShortMAAboveLongMA, ShortMABelowLongMA
 
 STRATEGY = """
 strategy:
@@ -103,6 +103,22 @@ def test_a_nested_named_mapping_is_built_as_a_signal():
     s = build_strategy(conf, Environment(md="md", out_dir=""))
 
     assert isinstance(s.exit_signal.signal, ShortMAAboveLongMA)
+
+
+def test_a_list_of_named_mappings_is_built_as_the_signals_of_a_combinator():
+    conf = {'strategy': {'name': 'Either',
+                         'entry_signal': {'name': 'AlwaysOnSignal'},
+                         'exit_signal': {'name': 'OrSignal',
+                                         'signals': [{'name': 'ShortMABelowLongMA',
+                                                      'short_MA': 50, 'long_MA': 200},
+                                                     {'name': 'ReverseSignal',
+                                                      'signal': {'name': 'AlwaysOnSignal'}}]}}}
+
+    s = build_strategy(conf, Environment(md="md", out_dir=""))
+
+    assert isinstance(s.exit_signal, OrSignal)
+    assert isinstance(s.exit_signal.signals[0], ShortMABelowLongMA)
+    assert s.exit_signal.signals[1].name == "ReverseSignal_AlwaysOnSignal"
 
 
 def test_entry_signal_is_mandatory():
