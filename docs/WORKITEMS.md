@@ -1,9 +1,11 @@
 # Workitems
-- implement claude skills encapsulating backtest and analyze strategy
-- trade PnL histogram into the visualization tool
+- implement vibha jha's TQQQ strategy (essentially FTD-21d) 
+- trade PnL histogram into the visualization tool (tab below)
+- implement claude skills encapsulating backtest
+- claude skill encapsulating strategy analysis
 - implement strategy analysis agent
 - experiment with strategy analysis agent on 50dVS200dMACrossover strategy
-- implement vibha jha's TQQQ strategy
+
 - analyze vibha jha's TQQQ strategy
 - implement claude skills encapsualting load_ohlcv, backtest, analyze_strategy, visualize_strategy (dashboard)
 - install matt pocock skills (grill me, implement) 

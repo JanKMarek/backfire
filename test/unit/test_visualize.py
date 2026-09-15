@@ -406,6 +406,22 @@ def test_the_figure_marks_the_executed_trades_on_the_price_axis(run_folder):
     assert len(entry_trace.x) == 2
 
 
+def test_the_hover_label_shows_only_near_the_underlying(run_folder):
+    run = load_run(run_folder)
+
+    fig = build_figure(run)
+
+    assert fig.layout.hovermode == 'closest'
+    price_hover = next(t for t in fig.data if t.name == 'price hover')
+    assert price_hover.yaxis == 'y2'
+    assert list(price_hover.y) == list(run.positions['C'])
+    assert price_hover.marker.opacity == 0
+    ohlc = next(t for t in fig.data if t.type == 'ohlc')
+    balance = next(t for t in fig.data if t.name.endswith('portfolio value'))
+    assert ohlc.hoverinfo == 'skip'
+    assert balance.hoverinfo == 'skip'
+
+
 def test_trade_markers_are_absent_when_there_are_no_trades(run_folder):
     run = load_run(run_folder)
     run.trades = load_trades(None)

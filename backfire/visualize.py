@@ -18,7 +18,8 @@
         the CAGR and the three largest drawdowns
       - the chart pane plots the mark to market balance on a log left axis, the
         underlying OHLC on a log right axis, the entry/exit signal regimes as
-        translucent bands and the executed trades as markers; it zooms and pans
+        translucent bands and the executed trades as markers; it zooms and pans, and
+        shows the day's OHLC and portfolio value when the cursor is near the underlying
       - the data pane tabulates monthly and annual strategy returns; clicking a cell
         marks the first and the last day of that period in the chart pane
 """
@@ -52,6 +53,9 @@ _GAIN_THRESHOLD = 0.05
 _LOSS_THRESHOLD = -0.05
 # a signal block shorter than this is widened so it stays visible on a multi year axis
 _MIN_BAND_DAYS = 3
+# how close, in pixels, the cursor must be to the underlying for the hover label to show
+_HOVER_DISTANCE_PX = 20
+_PRICE_HOVER_NAME = 'price hover'
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8050
 
@@ -384,6 +388,25 @@ def _band_trace(blocks, fill_color, name):
                       fillcolor=fill_color, hoverinfo='skip', name=name)
 
 
+def _price_hover_trace(run):
+    """
+        An invisible marker on every daily close, on the price axis, that carries the
+        chart's hover label: the day's OHLC and the portfolio value. The OHLC and
+        balance traces themselves skip hover, so with hovermode 'closest' the label
+        appears only when the cursor is within _HOVER_DISTANCE_PX of the underlying.
+    """
+    positions = run.positions
+    return go.Scatter(
+        x=positions.index, y=positions['C'], yaxis='y2', mode='markers',
+        marker=dict(size=6, opacity=0), name=_PRICE_HOVER_NAME, showlegend=False,
+        customdata=pd.concat([positions[['O', 'H', 'L', 'C']], run.balance], axis=1),
+        hovertemplate=("%{x|%Y-%m-%d}<br>"
+                       "O: %{customdata[0]:,.2f}  H: %{customdata[1]:,.2f}<br>"
+                       "L: %{customdata[2]:,.2f}  C: %{customdata[3]:,.2f}<br>"
+                       "Portfolio: $%{customdata[4]:,.0f}"
+                       f"<extra>{run.ticker}</extra>"))
+
+
 def figure_title(run, stats):
     """
         The two line chart title that doubles as the dashboard header: strategy,
@@ -429,18 +452,22 @@ def build_figure(run, stats=None):
 
     fig.add_trace(go.Ohlc(x=positions.index, open=positions['O'], high=positions['H'],
                           low=positions['L'], close=positions['C'],
-                          name=f"{run.ticker} price", opacity=0.5, yaxis='y2'))
+                          name=f"{run.ticker} price", opacity=0.5, yaxis='y2',
+                          hoverinfo='skip'))
 
     fig.add_trace(go.Scatter(x=positions.index, y=run.balance,
                              name=f"{run.strategy_name} portfolio value",
-                             line=dict(color='green', width=2)))
+                             line=dict(color='green', width=2), hoverinfo='skip'))
+
+    fig.add_trace(_price_hover_trace(run))
 
     if not run.trades.empty:
         fig.add_trace(go.Scatter(
             x=run.trades['entry_date'], y=run.trades['entry_price'], yaxis='y2',
             mode='markers', name='entry',
             marker=dict(symbol='triangle-up', size=9, color=_ENTRY_MARKER,
-                       line=dict(width=1, color='white'))))
+                       line=dict(width=1, color='white')),
+            hovertemplate="%{x|%Y-%m-%d}<br>price: %{y:,.2f}<extra>entry</extra>"))
         fig.add_trace(go.Scatter(
             x=run.trades['exit_date'], y=run.trades['exit_price'], yaxis='y2',
             mode='markers', name='exit',
@@ -455,12 +482,14 @@ def build_figure(run, stats=None):
         yaxis=dict(title='Portfolio value ($)', type='log', side='left'),
         yaxis2=dict(title=f'{run.ticker} price', type='log', overlaying='y', side='right'),
         yaxis3=dict(overlaying='y', range=[0, 1], visible=False, fixedrange=True),
-        xaxis=dict(dtick='M12', tickformat='%Y', ticklabelmode='period',
+        xaxis=dict(dtick='M12', tickformat='%Y', tick0='2000-01-01',
                   minor=dict(dtick='M1', ticks='outside', ticklen=3, showgrid=False),
                   rangeslider=dict(visible=False),
                   showspikes=True, spikemode='across', spikethickness=1),
         template='plotly_white',
-        hovermode='x unified',
+        # hover only near the underlying (see _price_hover_trace), not at any height
+        hovermode='closest',
+        hoverdistance=_HOVER_DISTANCE_PX,
         hoverlabel=dict(bgcolor='white', font_size=12),
         legend=dict(x=0.01, y=0.99, xanchor='left', yanchor='top'),
         margin=dict(l=60, r=60, t=60, b=40),
