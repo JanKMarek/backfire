@@ -16,9 +16,19 @@ from backfire.base import (
     BasicRiskManagement,
     Environment,
     Evaluator,
+    NoRiskManagement,
     PositionManagement,
+    SignalDrivenStrategy,
 )
-from backfire.signals import OrSignal, ShortMAAboveLongMA, ShortMABelowLongMA
+from backfire.signals import (
+    AlwaysOnSignal,
+    OrSignal,
+    RetracementSignal,
+    ShortMAAboveLongMA,
+    ShortMABelowLongMA,
+    TakeProfitSignal,
+    TrailingTakeProfitSignal,
+)
 
 STRATEGY = """
 strategy:
@@ -28,14 +38,16 @@ strategy:
     short_MA: 50
     long_MA: 200
   exit_signal:
-    name: ShortMABelowLongMA
-    short_MA: 50
-    long_MA: 200
+    name: OrSignal
+    signals:
+      - name: ShortMABelowLongMA
+        short_MA: 50
+        long_MA: 200
+      - name: TakeProfitSignal
+        threshold: 0.25
   risk_management:
     name: BasicRiskManagement
     stop_loss: 0.07
-    take_profit: 0.25
-    trailing_stop_period: null
   position_management:
     name: PositionManagement
     initial_position: 100000
@@ -74,12 +86,222 @@ def test_build_strategy_instantiates_the_named_components(strategy_file):
     assert s.name == "ShortMAVsLongMA"
     assert isinstance(s.entry_signal, ShortMAAboveLongMA)
     assert (s.entry_signal.short_MA, s.entry_signal.long_MA) == (50, 200)
-    assert isinstance(s.exit_signal, ShortMABelowLongMA)
+    assert isinstance(s.exit_signal, OrSignal)
+    assert isinstance(s.exit_signal.signals[0], ShortMABelowLongMA)
+    assert isinstance(s.exit_signal.signals[1], TakeProfitSignal)
+    assert s.exit_signal.signals[1].threshold == 0.25
     assert isinstance(s.risk_management, BasicRiskManagement)
-    assert (s.risk_management.stop_loss, s.risk_management.take_profit) == (0.07, 0.25)
-    assert s.risk_management.trailing_stop_period is None
+    assert s.risk_management.stop_loss == 0.07
     assert isinstance(s.position_management, PositionManagement)
     assert s.position_management.initial_position == 100000
+
+
+@pytest.mark.parametrize("parameter", ["take_profit", "trailing_stop_period"])
+def test_take_profit_and_trailing_stop_are_no_longer_risk_management_parameters(parameter):
+    conf = {'strategy': {'entry_signal': {'name': 'AlwaysOnSignal'},
+                         'risk_management': {'name': 'BasicRiskManagement',
+                                             'stop_loss': 0.07, parameter: 10}}}
+
+    with pytest.raises(ValueError, match="Cannot build risk management"):
+        build_strategy(conf, Environment(md="md", out_dir=""))
+
+
+def test_the_stop_loss_fires_below_the_buy_price_by_the_given_fraction():
+    rm = BasicRiskManagement(stop_loss=0.07)
+    row = lambda close: pd.Series({'C': close, 'buy_price': 100.0})
+
+    assert rm(row(93.5)) is None
+    assert rm(row(92.9)) == "sl"
+
+
+def market_with_closes(closes):
+    """
+        A market with the given daily closes, the open equal to the previous close, so a
+        trade bought on day t+1 pays the close of day t.
+    """
+    dates = pd.bdate_range("2020-01-01", periods=len(closes)).date
+    return pd.DataFrame({'O': [closes[0]] + closes[:-1], 'H': [c + 0.5 for c in closes],
+                         'L': [c - 0.5 for c in closes], 'C': closes, 'V': 1_000_000.0},
+                        index=dates)
+
+
+def rising_market(days, start=100.0, step=1.0):
+    """
+        A market rising by 'step' every day: the closes 100, 101, 102, ...
+    """
+    return market_with_closes([start + i * step for i in range(days)])
+
+
+def take_profit_backtest(exit_signal, market):
+    strategy = SignalDrivenStrategy(
+        env=Environment(md=market, out_dir=""),
+        entry_signal=AlwaysOnSignal(),
+        exit_signal=exit_signal,
+        risk_management=NoRiskManagement(),
+        position_management=PositionManagement(initial_position=100_000),
+        save_signals=False)
+    return strategy.backtest("TEST", from_date=market.index[0], to_date=market.index[-1])
+
+
+def test_the_take_profit_exit_signal_sells_once_the_trade_gain_exceeds_the_threshold():
+    market = rising_market(40)
+
+    _, positions, trades, _ = take_profit_backtest(TakeProfitSignal(threshold=0.1), market)
+
+    assert len(trades) == 1
+    trade = trades.iloc[0]
+    # bought at the open of the third day (the always on signal is first read on day two),
+    # the profit target is crossed on the first close above 110% of that price and the
+    # position is sold at the next open
+    assert trade.entry_price == 101.0
+    first_day_above = next(d for d, c in market.C.items() if c > 101.0 * 1.1)
+    assert positions.loc[first_day_above, 'xs'] == market.loc[first_day_above, 'C']
+    assert positions.loc[first_day_above, 'action'] == 'sell'
+    assert trade.exit_date == market.index[list(market.index).index(first_day_above) + 1]
+    assert trade.memo.endswith("TakeProfit_0.1")
+    assert trade.pnl_pcnt > 0.1
+
+
+def test_after_taking_profit_the_same_entry_signal_is_not_re_entered():
+    market = rising_market(60)
+
+    _, positions, trades, _ = take_profit_backtest(TakeProfitSignal(threshold=0.1), market)
+
+    # the entry signal stays on for the whole period, yet the strategy stays in cash
+    # after selling into strength rather than buying straight back
+    assert len(trades) == 1
+    assert (positions.pos.iloc[-10:] == 0).all()
+
+
+def test_the_take_profit_signal_combines_with_a_market_exit_signal():
+    market = rising_market(40)
+    exit_signal = OrSignal(ShortMABelowLongMA(short_MA=5, long_MA=20),
+                           TakeProfitSignal(threshold=0.1))
+
+    _, _, trades, _ = take_profit_backtest(exit_signal, market)
+
+    assert len(trades) == 1
+    assert trades.iloc[0].pnl_pcnt > 0.1
+
+
+def test_without_a_take_profit_the_rising_market_is_held_to_the_last_day():
+    market = rising_market(40)
+
+    _, _, trades, _ = take_profit_backtest(None, market)
+
+    assert len(trades) == 1
+    assert trades.iloc[0].memo.endswith("lastday")
+
+
+def test_the_trailing_take_profit_exit_signal_sells_on_the_retracement_after_the_threshold_gain():
+    # rises 100 -> 130, then gives back 2 a day: the first down day closes at 128, level
+    # with the 5d average of the previous closes; the second, at 126, undercuts it
+    up = [100.0 + i for i in range(31)]
+    down = [130.0 - 2 * i for i in range(1, 20)]
+    market = market_with_closes(up + down)
+
+    _, positions, trades, _ = take_profit_backtest(
+        TrailingTakeProfitSignal(threshold=0.1, period=5), market)
+
+    assert len(trades) == 1
+    trade = trades.iloc[0]
+    trigger_day = market.index[len(up) + 1]                # the second down day
+    assert positions.loc[trigger_day, 'action'] == 'sell'
+    assert positions.loc[trigger_day, 'xs'] == 126.0
+    assert trade.exit_price == 126.0
+    assert trade.memo.endswith("TrailingTakeProfit_0.1_5dMA")
+    assert trade.pnl_pcnt == pytest.approx(126.0 / 101.0 - 1)
+    # the entry signal never turned off, so the strategy stays in cash afterwards
+    assert (positions.pos.iloc[-5:] == 0).all()
+
+
+def test_the_trailing_take_profit_is_not_armed_by_a_retracement_below_the_threshold_gain():
+    # peaks 5% up, then falls below the average: no exit, the trade is held to the end
+    closes = [100.0 + i * 0.5 for i in range(11)] + [105.0 - i for i in range(1, 10)]
+    market = market_with_closes(closes)
+
+    _, _, trades, _ = take_profit_backtest(TrailingTakeProfitSignal(threshold=0.1, period=5), market)
+
+    assert len(trades) == 1
+    assert trades.iloc[0].memo.endswith("lastday")
+
+
+def test_the_trailing_take_profit_is_disarmed_when_a_stop_loss_closes_the_trade():
+    # the first trade (bought at 102) arms the trailing take profit at 114, then crashes
+    # straight through both the average and the stop loss, which takes precedence; the entry
+    # signal turns off and on again so a second trade is taken, which must start un-armed: it
+    # dips below the average before its own threshold gain and must be held, not sold
+    up = [100.0 + i * 2 for i in range(8)]                 # 100 -> 114, arms at > 112.2
+    crash = [90.0]                                         # 7% stop loss at 94.86
+    flat = [90.0] * 5
+    second = [90.0, 91.0, 92.0, 93.0, 94.0, 90.0, 89.0, 88.0, 87.0, 86.0]
+    closes = up + crash + flat + second
+    market = market_with_closes(closes)
+    entry = pd.Series(False, index=market.index)
+    entry.iloc[:10] = True
+    entry.iloc[15:] = True
+
+    class Entry(AlwaysOnSignal):
+        def _call_impl(self, ohlcv):
+            return pd.DataFrame({'es': entry.values}, index=ohlcv.index)
+
+    strategy = SignalDrivenStrategy(
+        env=Environment(md=market, out_dir=""),
+        entry_signal=Entry(),
+        exit_signal=TrailingTakeProfitSignal(threshold=0.1, period=3),
+        risk_management=BasicRiskManagement(stop_loss=0.07),
+        position_management=PositionManagement(initial_position=100_000),
+        save_signals=False)
+    _, positions, trades, _ = strategy.backtest("TEST", from_date=market.index[0],
+                                                to_date=market.index[-1])
+
+    assert len(trades) == 2
+    assert trades.iloc[0].memo.endswith("sl")
+    assert trades.iloc[1].memo.endswith("lastday")
+
+
+def test_the_retracement_exit_signal_sells_once_the_close_falls_the_retracement_below_the_high():
+    # rises 100 -> 130 (highs 0.5 above the closes), then gives back 2 a day: 10% below the
+    # 130.5 high is 117.45, first undercut by the seventh down day's close of 116
+    up = [100.0 + i for i in range(31)]
+    down = [130.0 - 2 * i for i in range(1, 20)]
+    market = market_with_closes(up + down)
+
+    _, positions, trades, _ = take_profit_backtest(RetracementSignal(retracement=0.1), market)
+
+    assert len(trades) == 1
+    trade = trades.iloc[0]
+    trigger_day = market.index[len(up) + 6]
+    assert positions.loc[trigger_day, 'action'] == 'sell'
+    assert positions.loc[trigger_day, 'xs'] == 116.0
+    assert positions.loc[market.index[len(up) + 5], 'xs'] == 0
+    assert trade.exit_price == 116.0
+    assert trade.memo.endswith("Retracement_0.1")
+
+
+def test_the_retracement_is_measured_from_the_high_since_the_position_was_opened():
+    # the market falls from 200 to 150 before the entry signal turns on, then drifts flat:
+    # the trade is held, the earlier high predates the position
+    fall = [200.0 - 5 * i for i in range(11)]
+    flat = [150.0] * 20
+    market = market_with_closes(fall + flat)
+    entry = pd.Series(False, index=market.index)
+    entry.iloc[len(fall):] = True
+
+    class Entry(AlwaysOnSignal):
+        def _call_impl(self, ohlcv):
+            return pd.DataFrame({'es': entry.values}, index=ohlcv.index)
+
+    strategy = SignalDrivenStrategy(
+        env=Environment(md=market, out_dir=""),
+        entry_signal=Entry(),
+        exit_signal=RetracementSignal(retracement=0.1),
+        position_management=PositionManagement(initial_position=100_000),
+        save_signals=False)
+    _, _, trades, _ = strategy.backtest("TEST", from_date=market.index[0], to_date=market.index[-1])
+
+    assert len(trades) == 1
+    assert trades.iloc[0].memo.endswith("lastday")
 
 
 def test_optional_sections_fall_back_to_the_strategy_defaults():

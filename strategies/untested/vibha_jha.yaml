@@ -4,14 +4,16 @@ strategy:
     name: ConsecutiveHigherHighsLows
     consecurity_days: 3
   exit_signal:
-    name: ShortMABelowLongMA
-    short_MA: 21 # days
-    long_MA: 50 # days
+    name: OrSignal
+    signals:
+      - name: ShortMABelowLongMA
+        short_MA: 21 # days
+        long_MA: 50 # days
+      - name: TakeProfitSignal
+        threshold: 0.20
   risk_management:
     name: BasicRiskManagement
     stop_loss: 0.05
-    take_profit: 0.20
-    trailing_stop_period: null
   position_management:
     name: PositionManagement
     initial_position: 100000

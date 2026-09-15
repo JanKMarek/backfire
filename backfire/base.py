@@ -127,87 +127,69 @@ class Signal:
         # return dataframe indexed on date with at least one column 'es' containing True/False
         pass
 
+    def evaluate_position(self, row):
+        """
+           The position dependent part of the signal, e.g. a profit target measured against
+           the buy price of the open trade. Unlike _call_impl it cannot be computed up front
+           from the prices alone, so the strategy evaluates it in the evening of every day it
+           holds a position, once that day's position and buy price are known. The signal is
+           on for the day if either part is on.
+        :param row: the day's row of the positions table - the OHLCV fields plus 'pos',
+                    'buy_price' and the signal values
+        :return: True if the signal is on for the day. Most signals depend on the market
+                 only, so the default is False.
+        """
+        return False
+
+    def reset(self):
+        """
+           Forgets any state the signal keeps about the open trade (e.g. whether a trailing
+           stop has been armed). The strategy calls it whenever the position is closed, for
+           whatever reason. Most signals keep no such state, so the default does nothing.
+        """
+        pass
+
 class BasicRiskManagement():
     """
-       Implements three common risk/profit management techniques:
-         i/ Stop loss. Returns label "sl" if stop loss reached.
-         ii/ Take Profit. Returns label "tp" if take profit is reached and not in
-                  trailing stop mode.
-         iii/ Trailing Stop. Returns label "ts" if price has fallen below the trailing stop
-                  moving average AFTER take profit has been reached.
+       Protects the portfolio capital from losing trades for which the exit signal did not
+       activate: the initial stop loss. Returns label "sl" when the price has fallen
+       stop_loss below the buy price of the open position.
 
+       Selling on a profit target or on a retracement are exit rules rather than risk
+       management rules - see signals.TakeProfitSignal and signals.TrailingTakeProfitSignal.
 
-        Common configurations:
-          RM(stop_loss=0.07, take_profit=None, trailing_stop_period=None):
-              7% stop loss, no take profit or trailing stop. Exit on exit signal only.
-          RM(stop_loss=0.07, take_profit=0.2, trailing_stop_period=10):
-              7% stop loss, trail with 10d MA after 20% take profit reached
+        Common configuration:
+          RM(stop_loss=0.07): 7% stop loss, otherwise exit on exit signal only.
     """
     def __init__(self,
-                 stop_loss=None, # 0.07 means 7%
-                 take_profit=None, # 0.2 is 20%
-                 trailing_stop_period=None): # in days
-        for param_name, value in (("stop_loss", stop_loss),
-                                   ("take_profit", take_profit),
-                                   ("trailing_stop_period", trailing_stop_period)):
-            if value is not None and not isinstance(value, (int, float)):
-                raise ValueError(
-                    f"BasicRiskManagement.{param_name} must be a number or YAML null, "
-                    f"got {value!r}. Use 'null' (or '~') for 'no value' in YAML, not "
-                    f"'$null', which YAML parses as the string '$null'.")
+                 stop_loss=None): # 0.07 means 7%
+        if stop_loss is not None and not isinstance(stop_loss, (int, float)):
+            raise ValueError(
+                f"BasicRiskManagement.stop_loss must be a number or YAML null, "
+                f"got {stop_loss!r}. Use 'null' (or '~') for 'no value' in YAML, not "
+                f"'$null', which YAML parses as the string '$null'.")
 
         self.stop_loss = stop_loss
-        self.take_profit = take_profit
-        self.trailing_stop_period = trailing_stop_period
-
-        if take_profit is None and trailing_stop_period is not None:
-            raise ValueError("Need take profit to use trailing_stop_period.")
-
-        self.hit_take_profit = False
-        self.last_blocked_signal = None
 
     @property
     def name(self):
-        return f"OpenProtectiveStop_stoploss={self.stop_loss}_take_profit={self.take_profit}_trailing_stop_period={self.trailing_stop_period}"
-
-    def is_blocked(self, signal_id):
-        return True if signal_id == self.last_blocked_signal else False
-
-    def clear_take_profit_hit(self):
-        self.hit_take_profit = False
+        return f"BasicRiskManagement_stop_loss={self.stop_loss}"
 
     def __call__(self, this_row):
-    #def __call__(self, current_price, buy_price, trailing_stop, entry_signal_id):
         """
-           Returns None if no action necessary, or action label (sl, tp, ts)
+           Returns None if no action necessary, or action label (sl)
         """
         current_price = this_row['C']
         buy_price = this_row['buy_price']
-        trailing_stop = this_row['trailing_stop']
-        entry_signal_id = this_row['es_id']
 
         if self.stop_loss is not None and (current_price < buy_price * (1.0 - self.stop_loss)):
-            return self.get_out("sl", entry_signal_id)
-
-        if self.trailing_stop_period is None: # not in trailing stop mode
-            if self.take_profit is not None and current_price > buy_price * (1.0 + self.take_profit):
-                return self.get_out("tp", entry_signal_id)
-        else: # in trailing stop mode
-            if not self.hit_take_profit and current_price > buy_price * (1.0 + self.take_profit):
-                self.hit_take_profit = True
-            if self.hit_take_profit and current_price < trailing_stop:
-                return self.get_out("ts", entry_signal_id)
+            return "sl"
 
         return None
 
-    def get_out(self, label, signal_id):
-        self.clear_take_profit_hit()
-        self.last_blocked_signal = signal_id
-        return label
-
 class NoRiskManagement(BasicRiskManagement):
     def __init__(self):
-        super().__init__(stop_loss=1.0, take_profit=1000, trailing_stop_period=None)
+        super().__init__()
 
     @property
     def name(self):
@@ -255,15 +237,19 @@ class SignalDrivenStrategy(StrategyInterface):
         The tree signals are evaluated at the end of the day, and so can use any of the OHLCV fields:
         1. The entry signal is mandatory and generally uses only the stock price information.
         2. The exit signal can be specified as an explicit signal (e.g., market state deteriorates or stock
-            displays weakness) or as the logical negation of the entry signal (so exit whenever entry signal
-            turns off). If no exit signal is specified, the strategy relies entirely on the risk management
-            signal for exits.
-        3. The risk management signal is specified as the Open Protective Stop and uses the position information
+            displays weakness), as the logical negation of the entry signal (so exit whenever entry signal
+            turns off) or as a rule on the open trade such as a profit target (TakeProfitSignal) or a
+            trailing take profit (TrailingTakeProfitSignal), both evaluated day by day against the buy price - see
+            Signal.evaluate_position. If no exit signal is specified, the strategy relies entirely on the
+            risk management signal for exits.
+        3. The risk management signal is the initial stop loss and uses the position information
             as well as the stock price information.
 
-        In deciding the trading action for the next day, the combination of the entry/risk management signal takes
+        In deciding the trading action for the next day, the combination of the exit/risk management signal takes
             precedence over the entry signal. Only one action can take place in one day - so the strategy
-            either enters or exits a position next day. The actions include 'buy', 'sl', 'pc', 'tp' 'so'.
+            either enters or exits a position next day. The actions include 'buy', 'sell' and 'sl'.
+            Once a position is closed, for whatever reason, the entry signal that was on at the time is
+            blocked: the strategy re-enters only on a new entry signal.
 
         The trading action for the day is executed the next morning at the opening prices. The 'es' and 'xs' fields
         reflect the signal at the end of the day while the 'pos' field represents the position throughout the day.
@@ -273,10 +259,10 @@ class SignalDrivenStrategy(StrategyInterface):
         The backtest simulates a trader who calculates signals and trading actions in the evening and
             then executes the trades at the next day's open. The backtest function executes the following
             for each ohlcv row:
-            1. Calculate position management related fields (pos, sl, tp, etc). Can only use the opening
+            1. Calculate position management related fields (pos, buy_price, etc). Can only use the opening
                price from the current day and any previous days' values.
-            2. Calculate signal values (es) - can use all OHLCV fields.
-            3. Calculate the action for the next day (buy, sl, so, tp, etc). CAn use all OHLCV fields.
+            2. Calculate signal values (es, xs) - can use all OHLCV fields.
+            3. Calculate the action for the next day (buy, sell, sl). Can use all OHLCV fields.
     """
     def __init__(self,
                  env,
@@ -311,7 +297,7 @@ class SignalDrivenStrategy(StrategyInterface):
             Computes position information.
               Input: dataframe with OHLCV and entry/exit signals. These are values at the end of the day.
               Output: adds columns 'pos', 'cash', 'memo' with shares, cash and memos.
-                  action - action to execute the next morning: es, xs and risk mgmt signals sl, pc, tp
+                  action - action to execute the next morning: buy, sell and risk mgmt signal sl
                   pos - position (# of shares) at the end of the day, after the morning actions were executed
                   cash - dtto
                   memo - action plus signal name
@@ -327,12 +313,12 @@ class SignalDrivenStrategy(StrategyInterface):
         pas['delta_shares'] = 0
         pas['memo'] = pd.Series(np.nan, index=pas.index, dtype=object)
         pas['buy_price'] = np.nan
-        pas['trailing_stop'] = np.nan
-
-        if self.risk_management.trailing_stop_period is not None:
-            pas['trailing_stop'] = pas.C.shift(1).rolling(self.risk_management.trailing_stop_period,min_periods=1).mean()
 
         pas.loc[pas.index[0], 'cash'] = self.position_management.initial_position
+
+        # the entry signal (id) that was on when the position was last closed; it is not
+        # acted on again, the strategy waits for a new entry signal
+        blocked_es_id = None
 
         # TODO: skip? simplifies the logic
         # first row:
@@ -358,7 +344,7 @@ class SignalDrivenStrategy(StrategyInterface):
             if pas.loc[prev_row, 'delta_shares'] != 0:
                 if pas.loc[prev_row, 'action'] in ['buy']:
                     t = 'bought'
-                elif pas.loc[prev_row, 'action'] in ['sell', 'sl', 'tp', 'ts']:
+                elif pas.loc[prev_row, 'action'] in ['sell', 'sl']:
                     t = 'sold'
                 elif pas.loc[prev_row, 'action'] in ['add', 'reduce']:
                     t = pas.loc[prev_row, 'action'] # NB this will be ignored by make_trades
@@ -375,49 +361,33 @@ class SignalDrivenStrategy(StrategyInterface):
                 # carry over the buy_price
                 pas.loc[this_row, 'buy_price'] = pas.loc[prev_row, 'buy_price']
 
-            if False:
-                # sell because of flag from prev day
-                if pas.loc[prev_row, 'pos'] != 0 and pas.loc[prev_row, 'action'] in ['xs', 'sl', 'pc', 'tp', 'ts']:
-                    pas.loc[this_row, 'pos'] = 0
-                    pas.loc[this_row, 'cash'] = pas.loc[prev_row, 'cash'] + \
-                                                pas.loc[prev_row, 'pos'] * pas.loc[this_row, 'O']
-                    pas.loc[this_row, 'buy_price'] = np.nan
-                    action = pas.loc[prev_row, 'action']
-                    pas.loc[this_row, 'memo'] =f"sold-{self.exit_signal.name if action == 'xs' else action}"
-                # buy because of flag from prev day
-                elif (pas.loc[prev_row, 'pos'] == 0 and
-                      pas.loc[prev_row, 'action'] == 'buy' and
-                      (not self.risk_management.is_blocked(pas.loc[prev_row, 'es_id']))):
-                    pas.loc[this_row, 'pos'] = \
-                        self.position_management.pos(pas.loc[prev_row, 'cash']) / pas.loc[this_row, 'O']
-                    pas.loc[this_row, 'cash'] = pas.loc[prev_row, 'cash'] - \
-                                                pas.loc[this_row, 'pos'] * pas.loc[this_row, 'O']
-                    pas.loc[this_row, 'buy_price'] = pas.loc[this_row, 'O']
-                    pas.loc[this_row, 'memo'] = f"bought-{self.entry_signal.name}"
-                # no trading actions
-                else:
-                    pas.loc[this_row, 'pos'] = pas.loc[prev_row, 'pos']
-                    pas.loc[this_row, 'cash'] = pas.loc[prev_row, 'cash']
-                    pas.loc[this_row, 'buy_price'] = pas.loc[prev_row, 'buy_price']
-                    pas.loc[this_row, 'memo'] = np.nan
-
             # Evening Actions:
             #     risk mgmt and pos mgmt set fields action, delta_shares, memo: risk mgmt takes precedence
-            #     risk mgmt sets actions (sl, tp, ts)
+            #     risk mgmt sets action sl
             #     pos mgmt sets actions buy, sell, add, reduce
 
-            # risk management: sl, tp or ts
+            # risk management: sl
             risk_management_action = self.risk_management(pas.loc[this_row])
-            if risk_management_action in ['sl', 'tp', 'ts']:
+            if risk_management_action == 'sl':
                 pas.loc[this_row, 'action'] = risk_management_action
                 pas.loc[this_row, 'delta_shares'] = -pas.loc[this_row, 'pos']
                 pas.loc[this_row, 'memo'] = risk_management_action
+                blocked_es_id = pas.loc[this_row, 'es_id']
+                self.exit_signal.reset()
                 continue
+
+            # the position dependent part of the exit signal (e.g. a profit target or a
+            # trailing stop) can only be evaluated now that the day's position and buy price
+            # are known; it is recorded in 'xs' like the market part, as the closing price on
+            # the days it is on
+            if (pas.loc[this_row, 'pos'] != 0
+                    and self.exit_signal.evaluate_position(pas.loc[this_row])):
+                pas.loc[this_row, 'xs'] = pas.loc[this_row, 'C']
 
             # position management: buy, add, sell, reduce
             # position is flat and signal triggered -> set action to buy next day
             if pas.loc[this_row, 'pos'] == 0 and pas.loc[this_row, 'es']:
-                if self.risk_management.is_blocked(pas.loc[this_row, 'es_id']):
+                if pas.loc[this_row, 'es_id'] == blocked_es_id:
                     continue
                 if pas.loc[this_row, 'xs']:
                     continue
@@ -429,7 +399,8 @@ class SignalDrivenStrategy(StrategyInterface):
                 pas.loc[this_row, 'action'] = 'sell'
                 pas.loc[this_row, 'delta_shares'] = -pas.loc[this_row, 'pos']
                 pas.loc[this_row, 'memo'] = self.exit_signal.name
-                self.risk_management.clear_take_profit_hit()
+                blocked_es_id = pas.loc[this_row, 'es_id']
+                self.exit_signal.reset()
             # else no action flag for tomorrow
             else:
                 pass
@@ -483,8 +454,8 @@ class SignalDrivenStrategy(StrategyInterface):
         """
             Runs the backtest and generates the following output dataframes:
                 price_and_signal: dataframe with columns 'O', 'H', 'L', 'C', 'V', 'es' and indexed with day dates
-                positions: dataframe with columns 'pos', 'sl', 'tp', 'memo', 'equity' and indexed with day dates
-                   'memo' contains: 'es'/'sl'/'tp'/'fday' on days either of these are triggered
+                positions: dataframe with columns 'pos', 'sl', 'memo', 'equity' and indexed with day dates
+                   'memo' contains: 'es'/'sl'/'fday' on days either of these are triggered
                 trades: dataframe with columns 'entry_date', 'shares', 'entry_price', 'entry_memo',
                     'exit_date', 'exit_price', 'exit_memo' and indexed with day dates
         :return:
@@ -624,8 +595,8 @@ class Evaluator:
 #     short_MA = 50 # days
 #     long_MA = 200 # days
 #     stop_loss = None
-#     take_profit = 0.6
-#     trailing_stop_period = 200
+#     trailing_take_profit_threshold = 0.6
+#     trailing_take_profit_period = 200
 #
 #     ticker = 'QQQ' # '^IXIC_1990'
 #     name = f"Index_{str(short_MA)}dMAvs{str(long_MA)}dMA"
@@ -637,12 +608,11 @@ class Evaluator:
 #
 #
 #     entry_signal = ShortMAAboveLongMA(short_MA=short_MA, long_MA=long_MA)
-#     exit_signal = ShortMABelowLongMA(short_MA=short_MA, long_MA=long_MA)
+#     exit_signal = OrSignal(ShortMABelowLongMA(short_MA=short_MA, long_MA=long_MA),
+#                            TrailingTakeProfitSignal(threshold=trailing_take_profit_threshold,
+#                                                      period=trailing_take_profit_period))
 #     #risk_management = NoRiskManagement()
-#     risk_management = BasicRiskManagement(
-#         stop_loss=stop_loss,
-#         take_profit=take_profit,
-#         trailing_stop_period=trailing_stop_period)
+#     risk_management = BasicRiskManagement(stop_loss=stop_loss)
 #     position_management = PositionManagement(initial_position=100000, policy="fixed_fraction", fraction=1.0)
 #
 #     s = SignalDrivenStrategy(

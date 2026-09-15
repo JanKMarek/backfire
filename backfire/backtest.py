@@ -24,8 +24,6 @@
         risk_management:
           name: BasicRiskManagement
           stop_loss: 0.07
-          take_profit: 0.25
-          trailing_stop_period: null
         position_management:
           name: PositionManagement
           initial_position: 100000
@@ -42,7 +40,9 @@
           short_MA: 50
           long_MA: 200
 
-    A combinator taking any number of signals is given a list of them:
+    A combinator taking any number of signals is given a list of them. A profit target
+    (TakeProfitSignal) and a trailing take profit (TrailingTakeProfitSignal) are exit signals
+    too, combined with the market exit signal this way:
 
       exit_signal:
         name: OrSignal
@@ -50,8 +50,11 @@
           - name: ShortMABelowLongMA
             short_MA: 50
             long_MA: 200
-          - name: BreakBelowMA
-            period: 20
+          - name: TakeProfitSignal
+            threshold: 0.25
+          - name: TrailingTakeProfitSignal
+            threshold: 0.2
+            period: 10
 
     Individual entries can be overridden from the command line without editing the file:
 

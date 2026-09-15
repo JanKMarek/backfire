@@ -10,8 +10,6 @@ strategy:
   risk_management:
     name: BasicRiskManagement
     stop_loss: $null
-    take_profit: $null
-    trailing_stop_period: $null
   position_management:
     name: PositionManagement
     initial_position: 100000

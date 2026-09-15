@@ -41,7 +41,7 @@ def _write_positions(path, dates, balance, es=None, xs=None, memo=None,
         'O': close, 'H': close + 1, 'L': close - 1, 'C': close, 'V': 1_000_000.0,
         'es': es, 'es_id': np.nan, 'xs': xs, 'pos': 0, 'cash': balance,
         'action': np.nan, 'delta_shares': 0, 'memo': memo,
-        'buy_price': np.nan, 'trailing_stop': np.nan,
+        'buy_price': np.nan,
         'balance': balance, 'unrealized_CumMax': 0.0, 'unrealized_dd': 0.0,
         'unrealized_dd_pcnt': 0.0,
     }, index=pd.Index(dates, name='Date' if with_date_header else None))

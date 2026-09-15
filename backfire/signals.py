@@ -24,6 +24,10 @@ class AlwaysOffSignal(Signal):
         return rv
 
 class ReverseSignal(Signal):
+    """
+        Logical negation of a market signal. Only the market part of the signal is reversed;
+        a position dependent signal such as TakeProfitSignal cannot be reversed.
+    """
     def __init__(self, signal):
         super().__init__(f"ReverseSignal_{signal.name}")
         self.signal = signal
@@ -37,7 +41,9 @@ class OrSignal(Signal):
     """
         Logical OR of any number of signals: on whenever at least one of the signals is on,
         off otherwise. A signal value that is missing (NaN, e.g. during a warm up period)
-        counts as off.
+        counts as off. The position dependent part of the signals (see
+        Signal.evaluate_position) is combined the same way, so a market exit signal, a
+        TakeProfitSignal and a TrailingTakeProfitSignal can be OR-ed into one exit signal.
 
         The returned dataframe keeps every constituent's value in a column named after the
         constituent, next to the combined 'es'.
@@ -59,6 +65,123 @@ class OrSignal(Signal):
             rv[s.name] = value
             rv['es'] = rv['es'] | value
         return rv
+
+    def evaluate_position(self, row):
+        # evaluate every signal: a stateful one (e.g. a trailing stop) must see every day
+        return any([s.evaluate_position(row) for s in self.signals])
+
+    def reset(self):
+        for s in self.signals:
+            s.reset()
+
+class TakeProfitSignal(Signal):
+    """
+        Sell into strength: on when the open trade has gained more than the threshold over
+        its buy price (0.25 is 25%). Used as an exit signal, the strategy closes the position
+        and, as after any exit, does not re-enter until a new entry signal is triggered.
+
+        The signal depends on the open position rather than on the market alone, so it is
+        off on every day up front and is evaluated day by day during the backtest (see
+        Signal.evaluate_position).
+    """
+    def __init__(self, threshold): # 0.25 is 25%
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or threshold <= 0:
+            raise ValueError(f"TakeProfitSignal.threshold must be a positive number, "
+                             f"e.g. 0.25 for 25%, got {threshold!r}.")
+        super().__init__(f"TakeProfit_{threshold}")
+        self.threshold = threshold
+
+    def _call_impl(self, ohlcv):
+        rv = pd.DataFrame(index=ohlcv.index)
+        rv['es'] = False
+        return rv
+
+    def evaluate_position(self, row):
+        if row['pos'] == 0 or pd.isna(row['buy_price']):
+            return False
+        return bool(row['C'] > row['buy_price'] * (1.0 + self.threshold))
+
+class TrailingTakeProfitSignal(Signal):
+    """
+        Sell into weakness: once the open trade has gained more than the threshold over its
+        buy price (0.2 is 20%) the trailing take profit is armed, and from then on the signal
+        is on whenever the price closes below the 'period' day moving average of the previous
+        closes. Used as an exit signal, the strategy closes the position and, as after any
+        exit, does not re-enter until a new entry signal is triggered.
+
+        The signal depends on the open position, so it is off on every day up front and is
+        evaluated day by day during the backtest (see Signal.evaluate_position). The moving
+        average is computed up front and kept in the 'trailing_take_profit' column of the
+        signal values; whether the stop is armed is remembered per trade and forgotten when
+        the position is closed (see Signal.reset).
+    """
+    def __init__(self, threshold, period): # 0.2 is 20%, period in days
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or threshold <= 0:
+            raise ValueError(f"TrailingTakeProfitSignal.threshold must be a positive number, "
+                             f"e.g. 0.2 for 20%, got {threshold!r}.")
+        if isinstance(period, bool) or not isinstance(period, int) or period <= 0:
+            raise ValueError(f"TrailingTakeProfitSignal.period must be a positive number of days, "
+                             f"got {period!r}.")
+        super().__init__(f"TrailingTakeProfit_{threshold}_{period}dMA")
+        self.threshold = threshold
+        self.period = period
+        self.armed = False
+        self.trailing_take_profit = None
+
+    def _call_impl(self, ohlcv):
+        rv = pd.DataFrame(index=ohlcv.index)
+        rv['es'] = False
+        rv['trailing_take_profit'] = ohlcv.C.shift(1).rolling(self.period, min_periods=1).mean()
+        self.trailing_take_profit = rv['trailing_take_profit']
+        return rv
+
+    def evaluate_position(self, row):
+        if self.trailing_take_profit is None:
+            raise RuntimeError(f"{self.name}: the signal values must be computed from the "
+                               f"prices before the position dependent part is evaluated.")
+        if row['pos'] == 0 or pd.isna(row['buy_price']):
+            return False
+        if not self.armed and row['C'] > row['buy_price'] * (1.0 + self.threshold):
+            self.armed = True
+        return self.armed and bool(row['C'] < self.trailing_take_profit[row.name])
+
+    def reset(self):
+        self.armed = False
+
+class RetracementSignal(Signal):
+    """
+        Trailing stop: on when the price closes more than the retracement (0.1 is 10%) below
+        the most recent high, the highest intraday high since the position was opened. Used
+        as an exit signal, the strategy closes the position and, as after any exit, does not
+        re-enter until a new entry signal is triggered.
+
+        The signal depends on the open position, so it is off on every day up front and is
+        evaluated day by day during the backtest (see Signal.evaluate_position). The high is
+        remembered per trade and forgotten when the position is closed (see Signal.reset).
+    """
+    def __init__(self, retracement): # 0.1 is 10%
+        if (isinstance(retracement, bool) or not isinstance(retracement, (int, float))
+                or not 0 < retracement < 1):
+            raise ValueError(f"RetracementSignal.retracement must be a number between 0 and 1, "
+                             f"e.g. 0.1 for 10%, got {retracement!r}.")
+        super().__init__(f"Retracement_{retracement}")
+        self.retracement = retracement
+        self.high = None
+
+    def _call_impl(self, ohlcv):
+        self.reset()
+        rv = pd.DataFrame(index=ohlcv.index)
+        rv['es'] = False
+        return rv
+
+    def evaluate_position(self, row):
+        if row['pos'] == 0 or pd.isna(row['buy_price']):
+            return False
+        self.high = row['H'] if self.high is None else max(self.high, row['H'])
+        return bool(row['C'] < self.high * (1.0 - self.retracement))
+
+    def reset(self):
+        self.high = None
 
 class ShortMAAboveLongMA(Signal):
     def __init__(self, short_MA, long_MA):

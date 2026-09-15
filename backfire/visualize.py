@@ -103,7 +103,7 @@ def load_positions(path):
     :param path: path to a pos_*.csv file
     :return: DataFrame indexed by a DatetimeIndex named 'Date', with the columns the
              backtest wrote: O, H, L, C, V, es, es_id, xs, pos, cash, action,
-             delta_shares, memo, buy_price, trailing_stop, balance and the unrealized_* columns
+             delta_shares, memo, buy_price, balance and the unrealized_* columns
     :raise ValueError: when the file has no rows or no 'balance' column
     """
     # index_col=0 rather than index_col='Date': some older runs lost the 'Date' header
@@ -160,16 +160,16 @@ def load_trades(path):
     return df
 
 
-_RISK_MANAGEMENT_LABELS = ('sl', 'tp', 'ts')
+_RISK_MANAGEMENT_LABELS = ('sl',)
 
 
 def signal_names(positions):
     """
         Recovers the entry and exit signal names from the trade memos, e.g.
         "bought:1153 shares;50dMAAbove200MA" names the entry signal. A "sold:" memo
-        names either the exit signal or a risk management label ('sl'/'tp'/'ts'); the
-        latter are skipped so a strategy that happens to be stopped out first still
-        reports its real exit signal name. The standalone signal CSVs are not used for
+        names either the exit signal or the risk management label ('sl'); the latter
+        is skipped so a strategy that happens to be stopped out first still reports
+        its real exit signal name. The standalone signal CSVs are not used for
         this: their filenames and column shapes are inconsistent across runs, while
         the memo is always written by the backtest.
     :param positions: the DataFrame from load_positions

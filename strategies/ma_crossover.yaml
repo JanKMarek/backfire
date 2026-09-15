@@ -11,8 +11,6 @@ strategy:
   risk_management:
     name: BasicRiskManagement
     stop_loss: 0.07
-    take_profit: null # 0.25
-    trailing_stop_period: null
   position_management:
     name: PositionManagement
     initial_position: 100000

@@ -1,15 +1,12 @@
 from backfire.base import Environment, BasicRiskManagement, SignalDrivenStrategy, PositionManagement
-from backfire.signals import ShortMAAboveLongMA, ShortMABelowLongMA
+from backfire.signals import OrSignal, ShortMAAboveLongMA, ShortMABelowLongMA, TakeProfitSignal
 
 short_MA = 50 # days
 long_MA = 200 # days
 stop_loss = 0.07
 take_profit = 0.25
-trailing_stop_period = None
 
-risk_management = BasicRiskManagement(stop_loss=stop_loss,
-                                      take_profit=take_profit,
-                                      trailing_stop_period=trailing_stop_period)
+risk_management = BasicRiskManagement(stop_loss=stop_loss)
 ticker = 'QQQ'
 name = f"ShortMAVsLongMA"
 from_date = '2000-01-01'
@@ -18,7 +15,8 @@ md = "./md"
 
 env = Environment(md=md, out_dir=out_dir)
 entry_signal = ShortMAAboveLongMA(short_MA=short_MA, long_MA=long_MA)
-exit_signal = ShortMABelowLongMA(short_MA=short_MA, long_MA=long_MA)
+exit_signal = OrSignal(ShortMABelowLongMA(short_MA=short_MA, long_MA=long_MA),
+                       TakeProfitSignal(threshold=take_profit))
 
 position_management = PositionManagement(initial_position=100000, policy="fixed_fraction", fraction=1.0)
 

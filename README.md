@@ -1,8 +1,5 @@
 # Backfire - quantitative stock investing strategy research engine. 
 
-
-
-
 ## Project Goals and Overview
 Backfire is a quantitative stock investing strategy research engine. 
 
@@ -35,7 +32,8 @@ Strategy rules:
 - **general overlay rules**: indicates strategy is inactive (a.k.a 'in cash', 'out of the market') or active (i.e., has positions in the market). General overlay rules may be market related (market in downtrend, market choppy) or strategy related (cool-off period after a period of losing trades)
 - **selection rules**: what underlying should the strategy buy/sell. 
 - **buy rules**: triggers that cause the strategy to buy the underlying. Examples: entry buy rule to establish the initial position in an underlying, add-on rule to add to a winning position (may be added in the future)
-- **sell rules**: triggers causing the strategy to sell the underlying. Examples of these are initial stoploss rules to limit losses on losing trades or profit taking rules to take profit in a trade (selling into strength while the underlying is still advancing or selling into weakness after the underlying has begun to decline)
+- **sell rules**: triggers causing the strategy to sell the underlying. Examples of these are selling on predefined profit target (selling into strength while the underlying is still advancing), selling on a retracement (selling into weakness after the underlying has begun to decline) or sell rules based on other indicators. 
+- **risk management rules**: triggers protecting portfolio capital against trades that become losing trades even though the sell rule has not activated. Examples include initial stop loss set a predefined amount below the buy point. 
 - **position size rules**: determine how much of the underlying (e.g., the number of shares or total dollar position size) should the strategy buy or sell.  
 
 We focus on long-only strategies (no shorting the underlying) and strategies making decisions based on end of the day prices (so no intraday trading). 
@@ -56,9 +54,10 @@ Strategy "CANSLIM Market Leader Breakout, Single Run":
 - selection rules: select most promising market leader breaking out from a consolidation
 - buy rules: move above the pivot point on volume
 - sell rules: 
-  - initial stop loss: 7% below pivot point
   - take profit rule (aka sell into strength): trade profit 25%+ and stock price 10%+ over the 21d MA
   - retracement sell rule (aka sell on weakness): stock price closes below 21d MA
+- risk management rules: 
+  - initial stop loss: 7% below pivot point
 - position size rules: buy shares for 20% of the portfolio equity
 
 And yet another example: 
@@ -67,9 +66,10 @@ Strategy "Vibha Jha TQQQ index strategy":
 - selection rules: always buy/sell TQQQ
 - buy rules: on Follow-Through Day or three Higher Highs/Higher Lows after QQQ consolidation of 8%-10% over at least four weeks
 - sell rules: 
-  - initial stop loss: QQQ closes below the First Day of Rally low of the day
   - strength take profit rule: trade profit 25%+ AND QQQ 10% over the 21d MA
   - weakness take profit rule: QQQ closes below 21d MA for two days in a row
+- risk management rules: 
+  - initial stop loss: QQQ closes below the First Day of Rally low of the day
 - position size: 
   - buy TQQQ shares for 50% of the portfolio equity
 
@@ -110,12 +110,12 @@ Visual Inspection of strategy performance is also helpful. We chart the underlyi
 To simplify reasoning about strategies and strategy analysis, it is useful to construct a strategy from signals and common rules:  
 - **general market overlay signal**: signal calculated from general market averages (e.g., SPY or QQQ indexes) which indicates the level of exposure the strategy should be taking on. Strategies operating on indexes generally do not need a separate market overlay signal since the general market information will be reflected in the index signals and so will generally need no market overlay signal. 
 - **entry signal**: Binary signal (True/False) that triggers either once (e.g., price crosses MA to the upside) or stays on (e.g., price above MA). When the signal triggers, the strategy establishes position. The same signal will not be reentered - i.e., if a position was exited (based on SL, TP, TS or ExitSignal), the position will not be reentered until a new entry signal is triggered. A new signal will also not be entered as long as the exit signal which caused it to be exited is in place. Note that entry signal going from True to False does not mean exiting - only exit signal triggers position exit. Use negation of entry signal as exit signal if you need such behaviour. 
-- **exit signal**: Binary signal that can trigger once or stay on. When it triggers, it takes precedence over the entry signal and full position is exited. When it goes off, the position may not be reentered on the same entry signal (strategy needs a new entry signal to put on a position) and may not be reentered as long as an exit signal is on.
+- **exit signal**: Binary signal that can trigger once or stay on. When it triggers, it takes precedence over the entry signal and full position is exited. When it goes off, the position may not be reentered on the same entry signal (strategy needs a new entry signal to put on a position) and may not be reentered as long as an exit signal is on. Common exit signals: 
+  - take profit: when in position and trade gain exceeds a threshold, close the position and do not act until a new entry signal is triggered
+  - trailing stop: when price falls back below a threshold (e.g., 21d MA or -10%), close the position and do not act until a new entry signal is triggered
 - **risk management rules**: 
-  - stop loss rule: when in position and trade loss exceeds a threshold, close the position and do not act until a new entry signal is triggered
-  - trailing stop rule: when price falls back below a threshold (e.g., 21d MA or -10%), close the position and do not act until a new entry signal is triggered
-  - take profit rule: when in position and trade gain exceeds a threshold, close the position and do not act until a new entry signal is triggered
-- **position size management rules**: 
+  - initial stop loss rule: when in position and trade loss exceeds a threshold, close the position and do not act until a new entry signal is triggered
+  **position size management rules**: 
     - Fixed Fraction: invest a percentage of the portfolio equity on entry, sell the entire positon on exit.  
     - Gradual Exposure (may be implemented in the future): as long as the same entry signal remains in place, the position size is increased as the underlying appreciates based on a predefined schedule, e.g. 10% initially, add 5% on 5% up and add 5% on 10% up. The position will NOT be decreased as the underlying drops (exit is triggered by SL, TP, TS or exit signal). 
 
@@ -174,7 +174,6 @@ Strategy position daily values - for every day in the trading period:
 - delta_shares: the number of shares to buy/sell the next day at the market open
 - memo: reason for the action (signal name)
 - buy_price: price at which shares were bought at the market open of the current day
-- trailing_stop: trailing stop for the current position 
 - balance: 
 - unrealized_CumMax
 - unrealized_dd,
@@ -187,8 +186,6 @@ Signal daily values - for each signal a file with one row for every day in the t
 
 
 All dates in YYYY-MM-DD. All stock prices reported with two decimal places. All Pnl/gain/loss numbers with zero decimal places and comma at thousands. All percentages with two decimal places, e.g. 0.77 or -0.33. 
-
-
 
 ### Interactive strategy result visualization
 
@@ -258,8 +255,6 @@ strategy:
   risk_management: 
     name: BasicRiskManagement
     stop_loss: 0.07
-    take_profit: 0.25
-    trailing_stop_period: null
   position_management: 
     name: PositionManagement
     initial_position: 100000
@@ -287,7 +282,13 @@ optional and fall back to the strategy defaults. An argument that is itself a ma
 ```
 
 A combinator taking any number of signals, such as `OrSignal` (on whenever at least one of its
-signals is on), is given a list of them:
+signals is on), is given a list of them. Rules on the open trade are exit signals too:
+`TakeProfitSignal` is on once the trade has gained `threshold` over its buy price (selling into
+strength), and `TrailingTakeProfitSignal` is armed once the trade has gained `threshold` and is then on
+whenever the price closes below the `period` day moving average (selling into weakness).
+`RetracementSignal` is a trailing stop: it is on once the price closes more than `retracement` below
+the highest high since the position was opened. Selling on a market signal, into strength or into
+weakness is written as:
 
 ```yaml
   exit_signal:
@@ -296,9 +297,17 @@ signals is on), is given a list of them:
       - name: ShortMABelowLongMA
         short_MA: 50
         long_MA: 200
-      - name: BreakBelowMA
-        period: 20
+      - name: TakeProfitSignal
+        threshold: 0.25
+      - name: TrailingTakeProfitSignal
+        threshold: 0.2
+        period: 10
+      - name: RetracementSignal
+        retracement: 0.1
 ```
+
+`BasicRiskManagement` keeps the rule that protects capital, `stop_loss`: the initial stop, a
+fraction below the buy price.
 
 To list all signals that can be named in the strategy yaml file, run: 
 `uv run python backfire/backtest.py --list_signals`
