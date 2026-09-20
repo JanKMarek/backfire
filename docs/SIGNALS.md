@@ -4,27 +4,26 @@
 
 ### Signal intent. 
 
-The Follow-Through Day (FTD) signal is a technical chart pattern applied to major indices. It confirmst that a new market uptrend has begun after a correction or a bear market. Conceptually, the signal has three stages: 
-- Rally Attempt (Day 1). After a decline or correction when a market has hit a new low, the market closes higher than a prior day. This begins the really attempt. 
-- Days 2 and 3. The index close must not undercut the Day 1 low. 
-- The Follow-Through (Day 4 and beyond, out to day 25). To confirm the uptrend, the index must gain at least 1.25%-1.5% on the day on total volume higher than previous day volume. At this point, the market is considered in uptrend. 
+The Follow-Through Day (FTD) signal is a technical chart pattern applied to daily charts of major indices. The signal detects index turnaround - the market correction (or bear market) is over and a new market uptrend has begun. The signal is a binary signal (True/False) and fires on the follow-through day only. 
 
-The uptrend ends when the index closes below the low of Day 1 or when it retraces by 10% from previous highs. 
+Conceptually, the signal has three stages: 
+- First Day of the Rally (Day 1). After a decline or correction, the market has hit a new low (Day 0) and the next day, the market closes higher than a prior day. This up day is the FDR and begins the rally attempt. The rally low is the lowest low of the correction up to and including Day 1 (usually the Day 0 low). 
+- Days 2 and 3. The index close must not undercut the rally low. If it does, the rally attempt is over.  
+- The Follow-Through Day (Day 4 and beyond, out to day 25). The index gains at least 1.25%-1.5% on this day on total volume higher than previous day volume. This is the FTD and it 'confirms' that rally attempt. The siganl indicates True on this day. At this point, the market is considered in uptrend. 
+- If no FTD occurs within 25 days of the FDR, the rally attempt is considered over. 
 
-The FTD signal is considered failed if it breaches the low of Day 1 before it retraces by 10% from previous highs. Otherwise, it is considered successful. 
-
-There is a significant amount of discretion in formalizing this intent. The usual values are: initial decline at least 8%-10% (and should take 4-6 weeks), the new low should be rached by intraday price and is measured over a 5-10 day window. 
+As you can see, there is a significant amount of discretion in the above signal definition. The standard parameter values are: initial decline marking the correction/bear market is at least 8%-10% (and should take 4-6 weeks). The new low on Day 0 should be reached by intraday price or closing price and is measured over a 5-10 day window of closing prices. The FTD should occur between days 4 and 25 (inclusive) and the index gain should be 1.25%-1.5%.   
 
 Standard follow-through days (all on Nasdaq): 
 
-Dot-com Crash Failed FTD: Day 1 of attempted rally Apr 4, 2001, FTD Apr 18, 2001. Failed FTD. 
-Dot-com Crash FTD: Day 1 of attempted rally Mar 13, 2003, FTD Mar 21, 2003. Successful.  
-GFC Crisis FTD: Day 1 of attempted rally Mar 10, 2009, FTD Mar 18, 2009. Successful. 
-Covid Crash FTD: Day 1 of attempted rally mar 23, 2020, FTD date Apr 2, 2020. Successful FTD. 
-2023 AI/Tech Rally: Day 1 of attempted rally Dec 28, 2022, FTD Jan 6, 2023. Succesful FTD. 
-Late 2023 FTD: Day 1 of attempted rally Oct 27, 2023, FTD Nov 2, 2023. Sucessful. 
-2025 FTD: Attmpted rally day 1: Apr 9, 2025. FTD Apr 23, 2025. Successful. 
-2026 FTD: Attmpted rally day 1: Mar 31, 2026. FTD Apr 8, 2026. Successful. 
+Dot-com Crash 2001 FTD: Day 1 of attempted rally Apr 4, 2001, FTD Apr 18, 2001. 
+Dot-com Crash 2003 FTD: Day 1 of attempted rally Mar 13, 2003, FTD Mar 21, 2003. 
+GFC Crisis FTD: Day 1 of attempted rally Mar 10, 2009, FTD Mar 18, 2009. 
+Covid Crash FTD: Day 1 of attempted rally mar 23, 2020, FTD date Apr 2, 2020. 
+2023 AI/Tech Rally: Day 1 of attempted rally Dec 28, 2022, FTD Jan 6, 2023. 
+Late 2023 FTD: Day 1 of attempted rally Oct 27, 2023, FTD Nov 2, 2023. 
+2025 FTD: Attmpted rally day 1: Apr 9, 2025. FTD Apr 23, 2025. 
+2026 FTD: Attmpted rally day 1: Mar 31, 2026. FTD Apr 8, 2026. 
 
 ### Signal formalization: 
 
@@ -51,6 +50,8 @@ A failed or expired rally attempt does not need another lookback_days day low: t
 When ON:  
   - on index close retracement more than terminal_retracement from the highest close since the signal turned ON, set state to OFF
 
-The signal is True when it is ON and False when it is OFF or RALLY_ATTEMPT. 
+The signal is True only on the Follow Through Day, i.e. the day the state changes from RALLY_ATTEMPT to ON. It is False on every other day: in OFF, in RALLY_ATTEMPT, and on the remaining days of ON. The ON state means the market is considered in uptrend; it fires no further signal and only blocks new rally attempts until the terminal retracement sets the state back to OFF.
+
+The signal value (True/False) is distinct from the state (OFF/RALLY_ATTEMPT/ON): "the signal went OFF" and "the signal turned ON" above refer to the state changing from ON to OFF and from RALLY_ATTEMPT to ON, not to the signal value changing. 
 
 
