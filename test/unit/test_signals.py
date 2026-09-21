@@ -1,12 +1,16 @@
+from datetime import date
+
 import pandas as pd
 import pytest
 
-from backfire.base import Signal
+from backfire.base import Environment, Signal, SignalDrivenStrategy
 from backfire.signals import (
     AlwaysOffSignal,
     AlwaysOnSignal,
+    FTDSignal,
     OrSignal,
     RetracementSignal,
+    ReverseSignal,
     TakeProfitSignal,
     TrailingTakeProfitSignal,
 )
@@ -263,6 +267,411 @@ def test_retracement_is_named_after_its_retracement():
 def test_retracement_needs_a_number_between_0_and_1(retracement):
     with pytest.raises(ValueError, match="between 0 and 1"):
         RetracementSignal(retracement=retracement)
+
+
+def bars(closes, volumes=None, lows=None, highs=None, start="2020-01-01"):
+    """
+        Daily bars with the given closes; the low is 1 below the close, the high 1 above it
+        and the volume 100 unless given.
+    """
+    days = pd.bdate_range(start, periods=len(closes)).date
+    lows = [c - 1 for c in closes] if lows is None else lows
+    highs = [c + 1 for c in closes] if highs is None else highs
+    volumes = [100.0] * len(closes) if volumes is None else volumes
+    return pd.DataFrame({'O': closes, 'H': highs, 'L': lows, 'C': closes, 'V': volumes},
+                        index=days)
+
+
+# The test parameters below are the real ones shrunk so that a test case is a handful of bars:
+# a 3 day window, a peak at least 3 days old, a 2% gain and a day 4 to day 6 window for the
+# Follow Through Day. In every sequence starting with a close of 100 the peak is therefore the
+# high of day 0, 101, and a day 0 needs a low of 92.92 or less made on day 3 or later.
+W, D0, R, U = FTDSignal.WATCHING, FTDSignal.DAY0, FTDSignal.RALLY, FTDSignal.UPTREND
+
+# day 3 is day 0 (low 92), day 4 is day 1, days 5 and 6 are days 2 and 3 and day 7 is day 4
+# of the attempt with a 2.1% gain - the Follow Through Day when its volume is higher
+DECLINE_AND_RALLY = [100.0, 98.0, 96.0, 93.0, 94.0, 94.5, 94.2, 96.2]
+FTD_VOLUMES = [100.0] * 7 + [200.0]
+
+
+def ftd(**kwargs):
+    params = dict(index=None, min_decline=0.08, min_peak_age_days=3, day0_window=3,
+                  ftd_min_gain=0.02, ftd_min_days=4, ftd_max_days=6)
+    params.update(kwargs)
+    return FTDSignal(**params)
+
+
+# --- day 0 and the correction test -----------------------------------------------------
+
+def test_no_day0_before_the_peak_is_old_enough():
+    # deep enough from the first day on, but the peak has to be min_peak_age_days old
+    rv = ftd(day0_window=1)(bars([100.0, 90.0, 91.0, 90.5]))
+
+    assert rv.state.tolist() == [W, W, W, D0]
+    assert rv.day0_date.tolist()[3] == rv.index[3]
+
+
+def test_no_day0_when_the_decline_from_the_peak_is_too_shallow():
+    rv = ftd()(bars([100.0, 98.0, 96.0, 95.0, 94.5]))
+
+    assert rv.state.tolist() == [W, W, W, W, W]
+    assert rv.decline_pct.tolist()[4] == pytest.approx(93.5 / 101.0 - 1)    # -7.4%, not -8%
+
+
+def test_a_new_low_that_fails_the_correction_test_leaves_no_trace():
+    # the same shallow decline, then a low that does clear the 8%: it is day 0 at once
+    rv = ftd()(bars([100.0, 98.0, 96.0, 95.0, 94.5, 92.0]))
+
+    assert rv.state.tolist() == [W, W, W, W, W, D0]
+    assert rv.rally_low.tolist()[5] == 91.0
+
+
+def test_day0_is_the_qualifying_new_low():
+    rv = ftd()(bars(DECLINE_AND_RALLY[:4]))
+
+    assert rv.state.tolist() == [W, W, W, D0]
+    assert rv.day0_date.tolist()[3] == rv.index[3]
+    assert rv.rally_low.tolist()[3] == 92.0
+    assert not rv.es.any()
+
+
+def test_the_peak_is_the_highest_high_since_the_start_of_the_data():
+    # the peak is the high of day 2 (111), so day 4 is deep enough but too close to it
+    rv = ftd()(bars([100.0, 105.0, 110.0, 108.0, 100.0, 99.0]))
+
+    assert rv.state.tolist() == [W, W, W, W, W, D0]
+    assert rv.peak.tolist()[5] == 111.0
+    assert rv.peak_date.tolist()[5] == rv.index[2]
+
+
+def test_no_day0_during_the_day0_window_warmup():
+    rv = ftd(day0_window=5, min_peak_age_days=1)(bars([100.0, 90.0, 89.0, 88.0]))
+
+    assert rv.state.tolist() == [W, W, W, W]
+
+
+# --- day 0 sliding and day 1 -----------------------------------------------------------
+
+def test_day0_slides_to_a_later_lower_low():
+    rv = ftd()(bars([100.0, 98.0, 96.0, 93.0, 92.0]))
+
+    assert rv.state.tolist() == [W, W, W, D0, D0]
+    assert rv.day0_date.tolist()[4] == rv.index[4]
+    assert rv.rally_low.tolist()[4] == 91.0
+
+
+def test_a_lower_low_that_closes_up_is_a_new_day0_not_day1():
+    # day 4 closes higher than day 3 but makes a lower low, so it is the new day 0; day 5 is
+    # the first day after it that closes up and it is day 1
+    closes = [100.0, 98.0, 96.0, 93.0, 93.5, 94.0]
+    lows = [99.0, 97.0, 95.0, 92.0, 91.0, 92.5]
+    rv = ftd()(bars(closes, lows=lows))
+
+    assert rv.state.tolist() == [W, W, W, D0, D0, R]
+    assert rv.day0_date.tolist()[4] == rv.index[4]
+    assert rv.rally_low.tolist()[4] == 91.0
+    assert pd.isna(rv.rally_day.tolist()[4])    # day 4 is day 0, not day 1 of the attempt
+    assert rv.rally_day.tolist()[5] == 1
+
+
+def test_a_new_window_low_above_the_day0_low_does_not_move_day0():
+    # day 6 makes the lowest low of the last 3 days, but it is above the day 0 low of 92
+    closes = [110.0, 98.0, 96.0, 93.0, 92.8, 92.6, 92.4]
+    lows = [109.0, 97.0, 95.0, 92.0, 96.0, 95.0, 94.0]
+    rv = ftd()(bars(closes, lows=lows))
+
+    assert rv.state.tolist() == [W, W, W, D0, D0, D0, D0]
+    assert rv.day0_date.tolist()[6] == rv.index[3]
+    assert rv.rally_low.tolist()[6] == 92.0
+
+
+def test_day1_is_the_first_up_close_after_day0():
+    rv = ftd()(bars(DECLINE_AND_RALLY[:5]))
+
+    assert rv.state.tolist() == [W, W, W, D0, R]
+    assert rv.rally_day.tolist()[4] == 1
+    assert rv.rally_low.tolist()[4] == 92.0
+
+
+def test_a_flat_close_is_not_day1():
+    rv = ftd()(bars([100.0, 98.0, 96.0, 93.0, 93.0]))
+
+    assert rv.state.tolist() == [W, W, W, D0, D0]
+
+
+# --- the rally attempt -----------------------------------------------------------------
+
+def test_the_rally_low_is_frozen_at_day1_and_an_intraday_dip_below_it_does_not_end_the_attempt():
+    closes = [100.0, 98.0, 96.0, 93.0, 94.0, 94.5, 93.5]
+    lows = [99.0, 97.0, 95.0, 92.0, 93.0, 93.5, 91.5]     # day 6 dips to 91.5, closes at 93.5
+    rv = ftd()(bars(closes, lows=lows))
+
+    assert rv.state.tolist() == [W, W, W, D0, R, R, R]
+    assert rv.rally_low.tolist()[4:] == [92.0, 92.0, 92.0]
+    assert rv.rally_day.tolist()[4:] == [1, 2, 3]
+
+
+def test_a_close_below_the_rally_low_ends_the_attempt_and_the_day_is_the_next_day0():
+    # day 6 closes at 91.5, below the rally low of 92; its own low is the next day 0
+    rv = ftd()(bars([100.0, 98.0, 96.0, 93.0, 94.0, 94.5, 91.5]))
+
+    assert rv.state.tolist() == [W, W, W, D0, R, R, D0]
+    assert rv.day0_date.tolist()[6] == rv.index[6]
+    assert rv.rally_low.tolist()[6] == 90.5
+    assert not rv.es.any()
+
+
+def test_days_2_and_3_of_the_attempt_can_never_be_a_follow_through_day():
+    # day 5 gains 2.7% and day 6 another 2.1%, both on higher volume, but they are days 2 and 3
+    closes = [100.0, 98.0, 96.0, 93.0, 94.0, 96.5, 98.5]
+    rv = ftd()(bars(closes, volumes=[100.0, 100.0, 100.0, 100.0, 100.0, 200.0, 300.0]))
+
+    assert rv.state.tolist() == [W, W, W, D0, R, R, R]
+    assert not rv.es.any()
+
+
+# day 3 is day 0, day 4 is day 1 and day 6 closes at 100, so day 7 - day 4 of the attempt -
+# is a Follow Through Day exactly when it closes at or above 100 * (1 + ftd_min_gain)
+RALLY_TO_100 = [100.0, 98.0, 96.0, 93.0, 94.0, 96.0, 100.0]
+
+
+def test_the_follow_through_day_needs_the_minimum_gain():
+    threshold = 100.0 * (1 + 0.02)
+
+    on_it = ftd()(bars(RALLY_TO_100 + [threshold], volumes=FTD_VOLUMES))
+    below_it = ftd()(bars(RALLY_TO_100 + [threshold - 0.01], volumes=FTD_VOLUMES))
+
+    assert on_it.es.tolist() == [False] * 7 + [True]
+    assert below_it.es.tolist() == [False] * 8
+    assert below_it.state.tolist()[7] == R
+
+
+def test_the_follow_through_day_needs_higher_volume_than_the_previous_day():
+    rv = ftd()(bars(DECLINE_AND_RALLY))     # a flat 100 throughout
+
+    assert rv.state.tolist() == [W, W, W, D0, R, R, R, R]
+    assert not rv.es.any()
+
+
+def test_a_follow_through_day_on_the_last_day_of_the_window_beats_the_timeout():
+    # day 1 is day 4, so day 6 of the attempt is day 9 - the last day ftd_max_days allows
+    closes = [100.0, 98.0, 96.0, 93.0, 94.0, 94.2, 94.4, 94.6, 94.8, 96.8]
+    rv = ftd()(bars(closes, volumes=[100.0] * 9 + [200.0]))
+
+    assert rv.state.tolist()[9] == U
+    assert rv.es.tolist() == [False] * 9 + [True]
+    assert rv.rally_day.tolist()[9] == 6
+
+
+def test_the_attempt_times_out_at_the_end_of_the_window():
+    closes = [100.0, 98.0, 96.0, 93.0, 94.0, 94.2, 94.4, 94.6, 94.8, 94.9]
+    rv = ftd()(bars(closes, volumes=[100.0] * 9 + [200.0]))
+
+    assert rv.state.tolist() == [W, W, W, D0, R, R, R, R, R, W]
+    assert not rv.es.any()
+
+
+def test_after_a_timeout_the_next_qualifying_low_is_a_new_day0_measured_from_the_same_peak():
+    closes = [100.0, 98.0, 96.0, 93.0, 94.0, 94.2, 94.4, 94.6, 94.8, 94.9, 92.5]
+    rv = ftd()(bars(closes, volumes=[100.0] * 9 + [200.0, 100.0]))
+
+    assert rv.state.tolist()[9:] == [W, D0]
+    assert rv.rally_low.tolist()[10] == 91.5
+    assert rv.peak_date.tolist()[10] == rv.index[0]
+
+
+# --- the pulse -------------------------------------------------------------------------
+
+def test_the_signal_is_true_only_on_the_follow_through_day():
+    closes = DECLINE_AND_RALLY + [96.5, 97.0, 97.5]
+    rv = ftd()(bars(closes, volumes=FTD_VOLUMES + [100.0] * 3))
+
+    assert rv.es.tolist() == [False] * 7 + [True, False, False, False]
+    assert rv.state.tolist()[7:] == [U, U, U, U]
+    assert rv.rally_day.tolist()[7] == 4
+    assert rv.id.tolist()[7] == 1
+
+
+# a Follow Through Day on day 7, a close below its rally low of 92 on day 8 that fails it and
+# is the next day 0, day 1 on day 9 and a second Follow Through Day on day 12
+TWO_FTDS = DECLINE_AND_RALLY + [91.5, 92.5, 92.6, 92.7, 94.6]
+TWO_FTDS_VOLUMES = FTD_VOLUMES + [100.0] * 4 + [200.0]
+
+
+def test_each_follow_through_day_gets_its_own_id():
+    rv = ftd()(bars(TWO_FTDS, volumes=TWO_FTDS_VOLUMES))
+
+    assert rv.es.tolist() == [False] * 7 + [True] + [False] * 4 + [True]
+    assert rv.id.tolist()[7] == 1
+    assert rv.id.tolist()[12] == 2
+
+
+# --- re-arming after a Follow Through Day ----------------------------------------------
+
+def test_the_signal_stays_off_while_the_uptrend_holds():
+    closes = DECLINE_AND_RALLY + [96.5, 96.6, 96.7, 96.8, 96.9]
+    rv = ftd()(bars(closes, volumes=FTD_VOLUMES + [200.0] * 5))
+
+    assert rv.es.tolist() == [False] * 7 + [True] + [False] * 5
+    assert set(rv.state.tolist()[7:]) == {U}
+
+
+def test_a_close_below_the_confirmed_rally_low_fails_the_follow_through_day():
+    rv = ftd()(bars(DECLINE_AND_RALLY + [91.5], volumes=FTD_VOLUMES + [100.0]))
+
+    assert rv.state.tolist()[7:] == [U, D0]
+    assert rv.day0_date.tolist()[8] == rv.index[8]
+
+
+def test_a_failed_follow_through_day_reuses_the_original_correction_peak():
+    # day 8 is 10.4% below the original peak of 101 but only 6.9% below the high since the
+    # Follow Through Day, so it is a day 0 only because the failure restores the old peak
+    rv = ftd()(bars(DECLINE_AND_RALLY + [91.5], volumes=FTD_VOLUMES + [100.0]))
+
+    assert rv.state.tolist()[8] == D0
+    assert rv.peak.tolist()[8] == 101.0
+    assert rv.peak_date.tolist()[8] == rv.index[0]
+
+
+def test_a_new_correction_after_a_follow_through_day_is_measured_from_the_high_since_it():
+    # a run up to a new high of 111 on day 10, then an 8% decline from it by day 13, with no
+    # close below the confirmed rally low of 92
+    closes = DECLINE_AND_RALLY + [100.0, 105.0, 110.0, 108.0, 105.0, 102.0]
+    rv = ftd()(bars(closes, volumes=FTD_VOLUMES + [100.0] * 6))
+
+    assert rv.state.tolist()[12:] == [U, D0]
+    assert rv.peak.tolist()[13] == 111.0
+    assert rv.peak_date.tolist()[13] == rv.index[10]
+
+
+def test_a_shallow_pullback_after_a_follow_through_day_does_not_re_arm():
+    # day 11 is 9.4% below the original peak of 101 - a day 0 if the original peak still
+    # counted - but only 5.9% below the high of 97.2 made on the Follow Through Day
+    closes = DECLINE_AND_RALLY + [96.0, 95.0, 94.0, 92.5]
+    rv = ftd()(bars(closes, volumes=FTD_VOLUMES + [100.0] * 4))
+
+    assert set(rv.state.tolist()[7:]) == {U}
+    assert rv.es.tolist() == [False] * 7 + [True] + [False] * 4
+
+
+def test_a_decline_from_a_too_young_post_follow_through_day_high_does_not_re_arm():
+    # a new high of 111 on day 8, then a deep drop: only day 11 is min_peak_age_days after it
+    closes = DECLINE_AND_RALLY + [110.0, 100.0, 99.0, 98.0]
+    rv = ftd()(bars(closes, volumes=FTD_VOLUMES + [100.0] * 4))
+
+    assert rv.state.tolist()[8:] == [U, U, U, D0]
+    assert rv.peak_date.tolist()[11] == rv.index[8]
+
+
+# --- running on a separate index -------------------------------------------------------
+
+@pytest.fixture
+def index_md(tmp_path):
+    """
+        Market data directory holding IXIC.csv - the decline and rally with a Follow Through Day
+        on the last day.
+    """
+    index = bars(DECLINE_AND_RALLY, volumes=FTD_VOLUMES)
+    md_dir = tmp_path / "md"
+    md_dir.mkdir()
+    index.rename(columns={'O': 'Open', 'H': 'High', 'L': 'Low', 'C': 'Close', 'V': 'Volume'}) \
+        .rename_axis('Date').to_csv(md_dir / "IXIC.csv")
+    return str(md_dir)
+
+
+def test_ftd_runs_on_the_index_prices_loaded_from_the_environment(index_md):
+    underlying = bars([50.0] * 8)      # flat: on its own prices the signal would never fire
+    signal = ftd(index="IXIC")
+    signal.bind(Environment(md=index_md, out_dir=""))
+
+    rv = signal(underlying)
+
+    assert rv.index.tolist() == underlying.index.tolist()
+    assert rv.index_close.tolist() == DECLINE_AND_RALLY
+    assert rv.es.tolist() == [False] * 7 + [True]
+
+
+def test_the_pulse_is_not_repeated_on_a_day_the_index_did_not_trade(index_md):
+    days = list(pd.bdate_range("2020-01-01", periods=8).date)
+    extra = date(2020, 1, 11)          # a Saturday, after the Follow Through Day
+    underlying = pd.DataFrame({'O': 50.0, 'H': 51.0, 'L': 49.0, 'C': 50.0, 'V': 100.0},
+                              index=days + [extra])
+    signal = ftd(index="IXIC")
+    signal.bind(Environment(md=index_md, out_dir=""))
+
+    rv = signal(underlying)
+
+    assert rv.es.tolist() == [False] * 7 + [True, False]
+    assert rv.state.tolist()[-1] == U       # the state does carry over
+
+
+def test_a_follow_through_day_the_underlying_missed_fires_on_its_next_trading_day(index_md):
+    days = list(pd.bdate_range("2020-01-01", periods=7).date)    # the index trades one more
+    later = date(2020, 1, 13)          # the Monday after the Follow Through Day
+    underlying = pd.DataFrame({'O': 50.0, 'H': 51.0, 'L': 49.0, 'C': 50.0, 'V': 100.0},
+                              index=days + [later])
+    signal = ftd(index="IXIC")
+    signal.bind(Environment(md=index_md, out_dir=""))
+
+    rv = signal(underlying)
+
+    assert rv.es.tolist() == [False] * 7 + [True]
+
+
+def test_ftd_on_an_index_needs_an_environment():
+    with pytest.raises(RuntimeError, match="needs an environment"):
+        ftd(index="IXIC")(bars(DECLINE_AND_RALLY))
+
+
+# --- construction ----------------------------------------------------------------------
+
+def test_ftd_defaults_and_name():
+    signal = FTDSignal()
+
+    assert (signal.index, signal.min_decline, signal.min_peak_age_days, signal.day0_window,
+            signal.ftd_min_gain, signal.ftd_min_days, signal.ftd_max_days) \
+        == ("IXIC", 0.08, 20, 5, 0.0125, 4, 25)
+    assert signal.name == "FTD_IXIC_0.08_20_5_0.0125_4_25"
+    assert FTDSignal(index=None).name == "FTD_0.08_20_5_0.0125_4_25"
+
+
+@pytest.mark.parametrize("kwargs, match", [
+    ({'index': 5}, "ticker"),
+    ({'min_peak_age_days': 0}, "positive number of days"),
+    ({'day0_window': 2.5}, "positive number of days"),
+    ({'ftd_min_days': True}, "positive number of days"),
+    ({'ftd_max_days': 0}, "positive number of days"),
+    ({'ftd_min_days': 10, 'ftd_max_days': 5}, "must not exceed"),
+    ({'min_decline': 0}, "between 0 and 1"),
+    ({'min_decline': 1.5}, "between 0 and 1"),
+    ({'min_decline': "0.08"}, "between 0 and 1"),
+    ({'ftd_min_gain': -0.01}, "non negative"),
+    ({'ftd_min_gain': "0.02"}, "non negative"),
+])
+def test_ftd_rejects_invalid_parameters(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        FTDSignal(**kwargs)
+
+
+def test_a_strategy_binds_its_environment_to_nested_signals():
+    env = Environment(md="md", out_dir="")
+    entry = ftd(index="IXIC")
+    nested = ftd(index="IXIC")
+    SignalDrivenStrategy(env=env, entry_signal=entry,
+                         exit_signal=OrSignal(AlwaysOffSignal(), ReverseSignal(nested)))
+
+    assert entry.env is env
+    assert nested.env is env
+
+
+def test_bind_keeps_an_environment_the_signal_was_given():
+    own = Environment(md="md", out_dir="")
+    signal = AlwaysOnSignal()
+    signal.env = own
+
+    signal.bind(Environment(md="other", out_dir=""))
+
+    assert signal.env is own
 
 
 def test_or_forwards_reset_to_its_signals(trending_ohlcv):

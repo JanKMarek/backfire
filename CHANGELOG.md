@@ -1,3 +1,31 @@
+# September 21, 2026
+
+Reimplemented `FTDSignal` against the specification in `docs/SIGNALS.md` as an explicit four
+state machine - `WATCHING`, `DAY0`, `RALLY`, `UPTREND` - whose transitions follow the spec rule
+by rule. What changed for anyone using it:
+
+- The signal is now on for **one day only**, the Follow Through Day itself, at most once per
+  rally attempt. It used to stay on for a whole uptrend and go off on a retracement from the
+  highest close. A strategy therefore enters on the Follow Through Day and relies entirely on
+  its exit signal to leave; after an exit it waits for the next Follow Through Day, which on
+  QQQ can be months or more than a year away. Expect materially fewer trades.
+- A rally attempt is now only looked for while the market is in a correction: the day 0 low has
+  to be at least `min_decline` below a peak at least `min_peak_age_days` old. Day 0 is an
+  explicit state that slides down to lower lows until day 1, the first day after it that closes
+  up. After a Follow Through Day the signal re-arms either when the index closes below the
+  confirmed rally's low (a failed Follow Through Day, which keeps the original correction's
+  peak) or when it declines far enough from the high made since.
+- Parameters: `lookback_days` is now `day0_window` and `terminal_retracement` is gone;
+  `min_decline` and `min_peak_age_days` are new. The defaults are the spec's:
+  `min_decline=0.08`, `min_peak_age_days=20`, `day0_window=5`, `ftd_min_gain=0.0125`,
+  `ftd_min_days=4`, `ftd_max_days=25`. `strategies/ftd_belowMA.yaml` was updated to match;
+  other strategy files naming the old parameters will fail to build.
+- The signal's CSV now carries `peak`, `peak_date`, `decline_pct`, `day0_date`, `rally_low`,
+  `rally_day` and `ftd_date` next to `es` and the state, for checking a run by hand.
+
+`test/integration/test_ftd_qqq.py` runs the signal over the QQQ data in `md/` and checks the
+Follow Through Days it finds against the reference dates in `docs/SIGNALS.md`.
+
 # September 14, 2026
 
 Added `backfire/visualize.py`, a Plotly Dash dashboard that reads the CSV files a backtest run

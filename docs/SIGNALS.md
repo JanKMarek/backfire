@@ -54,6 +54,17 @@ A rally attempt ends without an FTD, and the search for a new Day 0 resumes, whe
 | 2025 | Apr 7, 2025 | Apr 22, 2025 | |
 | 2026 | Mar 31, 2026 | Apr 8, 2026 | ??? |
 
+**Known deviations.** Run on QQQ with the default parameters, the rules above find a follow-through day within a few days of eight of the twelve reference dates (Apr 2001, Oct 2002, Apr 2020, Apr 2025 and Apr 2026 to the day). Four are out of reach, all for the same reason: the signal is still in the uptrend that an earlier follow-through day confirmed, because the index never closes below that rally's low and the decline from the high made since is not enough to satisfy the correction precondition again.
+
+| Reference FTD | Detected instead | Why the correction precondition does not hold again |
+|---|---|---|
+| Mar 17, 2003 | Feb 18, 2003 | the index keeps making higher highs, so there is never an 8% decline |
+| Mar 12, 2009 | Dec 2, 2008 | the Feb 10, 2009 high is 18 trading days before the Mar 9 low, short of 20 |
+| Sep 1, 2010 | Jul 13, 2010 | the late-August decline does not reach 8% below the Aug 9 high |
+| Jan 6, 2023 | Oct 21, 2022 | the Dec 13, 2022 high is 10 trading days before the Dec 28 low, short of 20 |
+
+These are consequences of the rules, not defects; the two age cases are reachable by tuning the minimum time from peak down to 15 days, at the cost of a fifth more signals overall. `test/integration/test_ftd_qqq.py` records all four as expected failures.
+
 More FTDs where we don't have the exact date but we are pretty sure FTD happened roughly at that time: 
 Oct 15, 1998 - surprise Fed cut after oct 8 LCTM low
 
