@@ -555,7 +555,7 @@ class FTDSignal(Signal):
     RALLY = "RALLY"
     UPTREND = "UPTREND"
 
-    def __init__(self, index="IXIC", min_decline=0.08, min_peak_age_days=20, day0_window=5,
+    def __init__(self, index="^IXIC", min_decline=0.08, min_peak_age_days=20, day0_window=5,
                  ftd_min_gain=0.0125, ftd_min_days=4, ftd_max_days=25):
         if index is not None and not isinstance(index, str):
             raise ValueError(f"FTDSignal.index must be a ticker or YAML null, got {index!r}.")
