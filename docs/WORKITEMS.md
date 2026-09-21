@@ -1,4 +1,19 @@
 # Workitems
+
+## Done
+- FTD signal analysis report (#11): `backfire/report_signal.py` with the episode gallery and the
+  scorecard, `backfire/signal_analysis.py` under it, `docs/ftd_reference.yaml` as the source of
+  the reference dates, and the `event` / `day0_block` / `ftd_block` diagnostics on `FTDSignal`.
+
+## Open
+- interactive signal dashboard (#6). The chart annotations in `report_signal.panel_figure` are
+  meant to be reused for it.
+- `backfire/visualize_signal.py` - the README documents it but it does not exist yet.
+- add `md/IXIC.csv` so the FTD signal can run on the Nasdaq Composite the reference calls were
+  actually made on, rather than on QQQ as a proxy. No code change is needed, only `index: IXIC`;
+  `md/` currently holds `^IXIC.csv`, which `Environment.load_ohlcv` does not find under that name.
+  Some of the reference hit-or-miss noise is volume differences between the index and the ETF.
+- replace the stale `notebooks/VisualizeSignal.ipynb`.
 - implement vibha jha's TQQQ strategy (essentially FTD-21d) 
 - trade PnL histogram into the visualization tool (tab below)
 - implement claude skills encapsulating backtest

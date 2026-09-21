@@ -1,0 +1,361 @@
+# Reference and candidate Follow Through Days.
+#
+# This file is the source of truth the code uses: test/integration/test_ftd_qqq.py checks the
+# signal against it and backfire/report_signal.py builds the reference gallery from it. The
+# tables in docs/SIGNALS.md say the same thing for a reader; when the two disagree, this file
+# wins and the tables are the ones to fix.
+#
+# Every entry has:
+#   date        the Follow Through Day itself
+#   episode     what the market was coming out of
+#   day1        Day 1 of the rally attempt the FTD confirmed, null when not recorded
+#   kind        'reference' - an IBD style discretionary call on the Nasdaq Composite, used as
+#               a sanity check; or 'candidate' - a date recalled but not yet confirmed against
+#               IBD's archive, so not an expectation until it has been
+#   confidence   for a candidate: 'medium' (fairly sure of the date), 'low' (an FTD happened
+#               around then but the date may be off) or 'contradicted' (the recalled date
+#               fails a plausibility check on QQQ, so the real FTD is a nearby day). Null for
+#               a reference, which SIGNALS.md does not grade.
+#   notes       the context, and for a candidate the QQQ close to close gain on the date and
+#               whether QQQ volume rose
+#
+# A reference the mechanical rules cannot reach with the default parameters also carries:
+#   unreachable.reason            why, in words
+#   unreachable.low               the day the correction precondition is applied to and fails
+#   unreachable.block             the clause it fails, as the signal's 'day0_block' records it
+#   unreachable.detected_instead  the Follow Through Day the rules confirm the bottom on
+#
+# SIGNALS.md also mentions Oct 15, 1998 (the surprise Fed cut after the Oct 8 LTCM low) as an
+# episode where an FTD almost certainly happened. It has no confirmed date and predates the
+# QQQ data, so it is prose there rather than an entry here.
+
+follow_through_days:
+
+  # --- references: docs/SIGNALS.md, 'Reference follow-through days' ---------------------
+
+  - date: 2001-04-10
+    episode: Dot-com crash 1
+    day1: 2001-04-05
+    kind: reference
+    confidence: null
+    notes: Day 4 off Apr 5.
+
+  - date: 2001-10-03
+    episode: Post 9/11
+    day1: 2001-09-21
+    kind: reference
+    confidence: null
+    notes: Off the Sep 21 9/11 low.
+
+  - date: 2002-10-15
+    episode: Dot-com crash 2
+    day1: null
+    kind: reference
+    confidence: null
+    notes: Off the Oct 2002 bear market low.
+
+  - date: 2003-03-17
+    episode: Dot-com crash 3
+    day1: 2003-03-12
+    kind: reference
+    confidence: null
+    notes: Day 4 off the Mar 12 low.
+    unreachable:
+      reason: >-
+        the rules confirm this bottom on 2003-02-18 and stay in UPTREND from there: QQQ never
+        closes below that rally low and keeps making higher highs, so the correction test
+        never holds again
+      low: 2003-03-12
+      block: DECLINE
+      detected_instead: 2003-02-18
+
+  - date: 2009-03-12
+    episode: GFC
+    day1: 2009-03-09
+    kind: reference
+    confidence: null
+    notes: Day 3 off of Mar 9 low. IBD made an exception to the Day 4 rule.
+    unreachable:
+      reason: >-
+        still UPTREND from the 2008-12-02 Follow Through Day: QQQ never closes below its rally
+        low of 22.09 (the 2009-03-09 low closed at 22.73) and the high since it, made on
+        2009-02-10, is only 18 trading days before that low - short of min_peak_age_days
+      low: 2009-03-09
+      block: PEAK_AGE
+      detected_instead: 2008-12-02
+
+  - date: 2010-09-01
+    episode: Sep 2010
+    day1: null
+    kind: reference
+    confidence: null
+    notes: Off the late-Aug 2010 low.
+    unreachable:
+      reason: >-
+        still UPTREND from the 2010-07-13 Follow Through Day: the late August decline does
+        reach 8.9% below the high of 42.03 made on 2010-08-09, but that high is only 14
+        trading days before the 2010-08-27 low - short of min_peak_age_days
+      low: 2010-08-27
+      block: PEAK_AGE
+      detected_instead: 2010-07-13
+
+  - date: 2019-01-04
+    episode: Xmas 2018
+    day1: 2018-12-24
+    kind: reference
+    confidence: null
+    notes: null
+
+  - date: 2020-04-02
+    episode: Covid crash
+    day1: 2020-03-23
+    kind: reference
+    confidence: null
+    notes: Covid.
+
+  - date: 2023-01-06
+    episode: 2023 AI/tech rally
+    day1: 2022-12-28
+    kind: reference
+    confidence: null
+    notes: null
+    unreachable:
+      reason: >-
+        still UPTREND from the 2022-10-21 Follow Through Day: the 2022-12-28 low is 12.5%
+        below the high of 296.88 made on 2022-12-13, but that high is only 10 trading days
+        old - short of min_peak_age_days
+      low: 2022-12-28
+      block: PEAK_AGE
+      detected_instead: 2022-10-21
+
+  - date: 2023-11-02
+    episode: Late 2023
+    day1: 2023-10-27
+    kind: reference
+    confidence: null
+    notes: SIGNALS.md marks the exact date '???'.
+
+  - date: 2025-04-22
+    episode: '2025'
+    day1: 2025-04-07
+    kind: reference
+    confidence: null
+    notes: null
+
+  - date: 2026-04-08
+    episode: '2026'
+    day1: 2026-03-31
+    kind: reference
+    confidence: null
+    notes: SIGNALS.md marks the exact date '???'.
+
+  # --- candidates: docs/SIGNALS.md, 'Candidate FTD test cases' --------------------------
+  # Recalled, not yet confirmed against IBD's archive. Not expectations until they have been.
+
+  - date: 1991-01-17
+    episode: Gulf War
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Start of the Gulf War air campaign. Before the QQQ data begins.
+
+  - date: 2004-05-25
+    episode: Spring 2004
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Off the May 17 low. QQQ +2.0%, volume up.
+
+  - date: 2004-08-18
+    episode: Summer 2004
+    day1: null
+    kind: candidate
+    confidence: medium
+    notes: Off the Aug 13 low. QQQ +1.8%, volume up.
+
+  - date: 2006-08-15
+    episode: Summer 2006
+    day1: null
+    kind: candidate
+    confidence: medium
+    notes: Off the Jul 2006 low. QQQ +2.5%, volume up.
+
+  - date: 2007-03-21
+    episode: Feb 2007 sell-off
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Fed day, after the Feb 27 sell-off. QQQ +1.9%, volume up.
+
+  - date: 2007-08-29
+    episode: Aug 2007 credit scare
+    day1: null
+    kind: candidate
+    confidence: medium
+    notes: Off the Aug 16 low. QQQ +2.9%, volume up.
+
+  - date: 2008-03-20
+    episode: Bear Stearns
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Off the Mar 17 low; failed. QQQ +2.0%, volume down.
+
+  - date: 2010-03-01
+    episode: Feb 2010
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Off the Feb 5 low. QQQ +1.4%, volume up.
+
+  - date: 2010-07-07
+    episode: Jul 2010
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Off the Jul 1 low. QQQ +3.2%, volume down.
+
+  - date: 2011-08-23
+    episode: Aug 2011 debt ceiling
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Off the Aug 9 low; failed. QQQ +4.1%, volume down.
+
+  - date: 2011-10-12
+    episode: Oct 2011
+    day1: null
+    kind: candidate
+    confidence: contradicted
+    notes: >-
+      Off the Oct 4 low. QQQ only +0.5% on Oct 12, volume up; the real FTD is probably Oct 10.
+
+  - date: 2011-12-20
+    episode: Dec 2011
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Off the Nov 25 low. QQQ +3.0%, volume up.
+
+  - date: 2014-10-21
+    episode: Oct 2014 ebola scare
+    day1: null
+    kind: candidate
+    confidence: medium
+    notes: Off the Oct 15 low. QQQ +2.6%, volume up.
+
+  - date: 2015-10-05
+    episode: Aug 2015 devaluation
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: After the Aug 24 low and the late-Sep retest. QQQ +1.4%, volume down.
+
+  - date: 2016-02-17
+    episode: Early 2016
+    day1: null
+    kind: candidate
+    confidence: medium
+    notes: Off the Feb 11 low. QQQ +2.3%, volume up.
+
+  - date: 2018-02-14
+    episode: Feb 2018 volmageddon
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Off the Feb 9 low. QQQ +1.9%, volume up.
+
+  - date: 2018-11-07
+    episode: Oct 2018
+    day1: null
+    kind: candidate
+    confidence: medium
+    notes: Post-midterms, off the Oct 29 low; failed. QQQ +3.1%, volume up.
+
+  - date: 2019-06-05
+    episode: May 2019 tariffs
+    day1: null
+    kind: candidate
+    confidence: contradicted
+    notes: >-
+      Off the Jun 3 low. QQQ only +0.75% on Jun 5, volume down, and only Day 2; the real FTD
+      is a nearby day in early June.
+
+  - date: 2020-11-04
+    episode: Autumn 2020
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Day after the US election, after the Sep-Oct correction. QQQ +4.5%, volume up.
+
+  - date: 2021-10-14
+    episode: Oct 2021
+    day1: null
+    kind: candidate
+    confidence: medium
+    notes: Off the Oct 4 low. QQQ +1.8%, volume up.
+
+  - date: 2022-03-18
+    episode: Mar 2022
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Off the Mar 14 low; failed. QQQ +2.1%, volume up.
+
+  - date: 2022-05-26
+    episode: May 2022
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Off the May 20 low; failed. QQQ +2.8%, volume down.
+
+  - date: 2022-06-24
+    episode: Jun 2022
+    day1: null
+    kind: candidate
+    confidence: medium
+    notes: Off the Jun 16 low; failed later. QQQ +3.4%, volume up.
+
+  - date: 2022-10-21
+    episode: Oct 2022 bear market low
+    day1: null
+    kind: candidate
+    confidence: medium
+    notes: Off the Oct 13 low. QQQ +2.3%, volume up.
+
+  - date: 2023-01-06
+    episode: 2023 AI/tech rally
+    day1: null
+    kind: candidate
+    confidence: medium
+    notes: Off the Dec 28 low. QQQ +2.8%, volume up. Also a reference date above.
+
+  - date: 2023-11-01
+    episode: Late 2023
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: >-
+      Off the Oct 26 low; the Nasdaq and the S&P 500 were possibly called on different days.
+      QQQ Nov 1 +1.7%, volume up; Nov 2 +1.8%, volume down. Nov 2 is the reference date above.
+
+  - date: 2024-08-13
+    episode: Aug 2024 yen carry unwind
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Off the Aug 5 low. QQQ +2.5%, volume up.
+
+  - date: 2025-03-24
+    episode: Mar 2025
+    day1: null
+    kind: candidate
+    confidence: low
+    notes: Off the Mar 13 low; failed. QQQ +2.0%, volume down.
+
+  - date: 2025-04-22
+    episode: '2025'
+    day1: null
+    kind: candidate
+    confidence: medium
+    notes: Off the Apr 7 low. QQQ +2.6%, volume up. Also a reference date above.

@@ -37,7 +37,19 @@ A rally attempt ends without an FTD, and the search for a new Day 0 resumes, whe
 | Earliest FTD day | Day 4 | fixed |
 | Latest FTD day | Day 25 | fixed |
 
+**What the signal records.** Besides `es`, the signal writes a row of diagnostics for every day so that a run can be audited without re-deriving it. Next to the state and the peak, Day 0, rally low and rally day it is working with, three columns say what the machine did with the day and why:
+
+| Column | Values | Meaning |
+|---|---|---|
+| `event` | `DAY0`, `DAY0_LOWERED`, `DAY1`, `UNDERCUT`, `TIMEOUT`, `FTD`, `FTD_FAILED`, `NEW_CORRECTION` | The transitions the day made, joined with `+` when it makes more than one, e.g. `UNDERCUT+DAY0`. `es` is on exactly on the days whose event contains `FTD`. |
+| `day0_block` | `DECLINE`, `PEAK_AGE`, or both | On a day that makes a new Day 0 window low but is not a Day 0: the clauses of the correction precondition it fails. |
+| `ftd_block` | `TOO_EARLY`, `VOLUME`, or both | On a rally day that gains at least the minimum but is not a follow-through day: the remaining clauses it fails. |
+
+None of this feeds back into the rules. Like `es`, these three mark a single day: they are never carried over to the next one, and a mark made on a day the underlying did not trade moves to its next trading day.
+
 **Reference follow-through days.** The dates below are IBD-style discretionary calls made on the Nasdaq Composite. They are reference points for sanity-checking the signal, not exact expectations: the mechanical rules above may label Day 1 differently (several of the calls count the low day itself as Day 1) or confirm a few days earlier or later, and volume on an ETF proxy such as QQQ does not always agree with index volume.
+
+The two tables in this section - the reference dates and the candidates below them - are also held as data in [`docs/ftd_reference.yaml`](ftd_reference.yaml), and **that file is the one the code reads**: `test/integration/test_ftd_qqq.py` checks the signal against it and `backfire/report_signal.py` builds its gallery from it. The tables here are for reading; when the two disagree, the YAML wins and the tables are the ones to fix.
 
 | Episode | Day 1 of attempted rally | FTD | Notes |
 |---|---|---|---|
@@ -56,14 +68,16 @@ A rally attempt ends without an FTD, and the search for a new Day 0 resumes, whe
 
 **Known deviations.** Run on QQQ with the default parameters, the rules above find a follow-through day within a few days of eight of the twelve reference dates (Apr 2001, Oct 2002, Apr 2020, Apr 2025 and Apr 2026 to the day). Four are out of reach, all for the same reason: the signal is still in the uptrend that an earlier follow-through day confirmed, because the index never closes below that rally's low and the decline from the high made since is not enough to satisfy the correction precondition again.
 
-| Reference FTD | Detected instead | Why the correction precondition does not hold again |
-|---|---|---|
-| Mar 17, 2003 | Feb 18, 2003 | the index keeps making higher highs, so there is never an 8% decline |
-| Mar 12, 2009 | Dec 2, 2008 | the Feb 10, 2009 high is 18 trading days before the Mar 9 low, short of 20 |
-| Sep 1, 2010 | Jul 13, 2010 | the late-August decline does not reach 8% below the Aug 9 high |
-| Jan 6, 2023 | Oct 21, 2022 | the Dec 13, 2022 high is 10 trading days before the Dec 28 low, short of 20 |
+| Reference FTD | Detected instead | Why the correction precondition does not hold again | Recorded as |
+|---|---|---|---|
+| Mar 17, 2003 | Feb 18, 2003 | the index keeps making higher highs, so there is never an 8% decline - the deepest low since the high is 5.9% below it | `DECLINE` |
+| Mar 12, 2009 | Dec 2, 2008 | the Feb 10, 2009 high is 18 trading days before the Mar 9 low, short of 20 | `PEAK_AGE` |
+| Sep 1, 2010 | Jul 13, 2010 | the late-August decline does reach 8.9% below the Aug 9 high, but that high is only 14 trading days before the Aug 27 low, short of 20 | `PEAK_AGE` |
+| Jan 6, 2023 | Oct 21, 2022 | the Dec 13, 2022 high is 10 trading days before the Dec 28 low, short of 20 | `PEAK_AGE` |
 
-These are consequences of the rules, not defects; the two age cases are reachable by tuning the minimum time from peak down to 15 days, at the cost of a fifth more signals overall. `test/integration/test_ftd_qqq.py` records all four as expected failures.
+These are consequences of the rules, not defects; the three age cases are reachable by tuning the minimum time from peak down to 15 days, which finds ten of the twelve references at the cost of a fifth more signals overall (74 against 62 on QQQ). `test/integration/test_ftd_qqq.py` records all four as expected failures and checks the recorded reason against the "Recorded as" column above.
+
+The "Recorded as" column is the `day0_block` the signal writes on the day the reference call was made off; the signal records the clause that stopped each near miss day by day, and `backfire/report_signal.py` draws it. Sep 2010 used to be documented as a decline that was too shallow, which the recorded reason contradicts: the decline is deep enough and it is the age of the August 9 high that rejects it.
 
 More FTDs where we don't have the exact date but we are pretty sure FTD happened roughly at that time: 
 Oct 15, 1998 - surprise Fed cut after oct 8 LCTM low

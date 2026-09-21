@@ -278,6 +278,25 @@ class ConsecutiveHigherHighsLows(Signal):
 
 
 
+# The columns of the signal values that mark a single day rather than describe a running
+# state: what happened on the day and, when nothing did, why not. They are never carried
+# over to the next day - see FTDSignal._align.
+_FTD_MARK_COLUMNS = ('event', 'day0_block', 'ftd_block')
+
+
+def _join_marks(marks):
+    """
+        Joins the marks of several days into the one value of the day they are reported on,
+        dropping repetitions (two days can be blocked for the same reason).
+    """
+    rv = []
+    for mark in marks:
+        for token in str(mark).split('+'):
+            if token not in rv:
+                rv.append(token)
+    return '+'.join(rv)
+
+
 class _FTDMachine:
     """
         The Follow Through Day state machine of FTDSignal, one day at a time. See
@@ -292,6 +311,11 @@ class _FTDMachine:
           ftd_peak  the highest high since the confirmed Follow Through Day. The new correction
                     that re-arms the signal is measured against this one, not against peak,
                     which by construction sits well above the rally the FTD confirmed.
+
+        Besides driving the signal the machine explains itself: every day carries the
+        transitions it made ('event') and, on a day that came close to a transition and did
+        not make it, the test that stopped it ('day0_block', 'ftd_block'). Nothing in the
+        explanation feeds back into the rules.
     """
     def __init__(self, signal, idx):
         self.s = signal
@@ -309,19 +333,46 @@ class _FTDMachine:
         self.ftd_peak = self.ftd_peak_i = self.ftd_rally_low = self.ftd_i = None
         self.ftd_rally_day = None
         self.day0_i = self.rally_low = self.rally_day = None
+        self.events, self.day0_block, self.ftd_block = [], None, None
 
     # --- the tests of docs/SIGNALS.md ------------------------------------------------------
+    def _is_new_low(self, i):
+        """ The day's low is the lowest of the day0_window days ending on it. """
+        return not math.isnan(self.window_low[i]) and self.L[i] <= self.window_low[i]
+
+    def _day0_block(self, i, peak, peak_i):
+        """
+            Why a new day0_window low is not a day 0 - the clauses of the correction
+            precondition (SIGNALS.md 'Correction precondition') it fails, joined with '+'.
+            An empty string means the day is a day 0.
+        """
+        rv = []
+        if self.L[i] > peak * (1.0 - self.s.min_decline):
+            rv.append('DECLINE')
+        if i - peak_i < self.s.min_peak_age_days:
+            rv.append('PEAK_AGE')
+        return '+'.join(rv)
+
     def _is_day0(self, i, peak, peak_i):
         """ A new day0_window low deep enough below a peak old enough (SIGNALS.md 'Day 0'). """
-        return (not math.isnan(self.window_low[i]) and self.L[i] <= self.window_low[i]
-                and self.L[i] <= peak * (1.0 - self.s.min_decline)
-                and i - peak_i >= self.s.min_peak_age_days)
+        return self._is_new_low(i) and not self._day0_block(i, peak, peak_i)
 
-    def _is_ftd(self, i):
-        """ Day ftd_min_days..ftd_max_days, the gain and volume above the previous day's. """
-        return (self.s.ftd_min_days <= self.rally_day <= self.s.ftd_max_days
-                and self.C[i] >= self.C[i - 1] * (1.0 + self.s.ftd_min_gain)
-                and self.V[i] > self.V[i - 1])
+    def _has_ftd_gain(self, i):
+        """ The close is at least ftd_min_gain above the previous close. """
+        return self.C[i] >= self.C[i - 1] * (1.0 + self.s.ftd_min_gain)
+
+    def _ftd_block(self, i):
+        """
+            Why a rally day that gained enough is not a Follow Through Day - the remaining
+            clauses (SIGNALS.md 'Follow-Through Day') it fails, joined with '+'. An empty
+            string means the day is a Follow Through Day.
+        """
+        rv = []
+        if not self.s.ftd_min_days <= self.rally_day <= self.s.ftd_max_days:
+            rv.append('TOO_EARLY')
+        if self.V[i] <= self.V[i - 1]:
+            rv.append('VOLUME')
+        return '+'.join(rv)
 
     # --- bookkeeping -----------------------------------------------------------------------
     def _open_day0(self, i):
@@ -334,9 +385,26 @@ class _FTDMachine:
     def _end_uptrend(self):
         self.ftd_peak = self.ftd_peak_i = self.ftd_rally_low = None
 
+    def _try_day0(self, i, peak, peak_i):
+        """
+            Offers the day to the day 0 test, recording either the transition or the clause
+            of the correction precondition that stopped a new low from being a day 0.
+        :return: True if the day is a day 0. The caller opens it.
+        """
+        if not self._is_new_low(i):
+            return False
+        block = self._day0_block(i, peak, peak_i)
+        if block:
+            self.day0_block = block
+            return False
+        self.events.append('DAY0')
+        return True
+
     # --- one day ---------------------------------------------------------------------------
     def step(self, i):
         """ Processes the day; returns True if it is a Follow Through Day. """
+        self.events, self.day0_block, self.ftd_block = [], None, None
+
         if self.state == FTDSignal.UPTREND and self.H[i] > self.ftd_peak:
             self.ftd_peak, self.ftd_peak_i = self.H[i], i
         if self.H[i] > self.peak:
@@ -347,31 +415,41 @@ class _FTDMachine:
             if self.C[i] < self.rally_low:
                 # undercut: a close below the rally low ends the attempt. The undercutting day
                 # may itself be the next day 0, so it falls through to the day 0 search below.
+                self.events.append('UNDERCUT')
                 self._end_attempt()
                 self.state = FTDSignal.WATCHING
-            elif self._is_ftd(i):
-                # the Follow Through Day confirms the attempt; it wins over the timeout on the
-                # last day of the window
-                self.ftd_i, self.ftd_rally_low = i, self.rally_low
-                self.ftd_rally_day = self.rally_day
-                self.ftd_peak, self.ftd_peak_i = self.H[i], i
-                self._end_attempt()
-                self.state = FTDSignal.UPTREND
-                return True
-            elif self.rally_day >= self.s.ftd_max_days:
-                # timeout: no Follow Through Day by the end of the window. Like the undercut,
-                # the day falls through to the day 0 search.
-                self._end_attempt()
-                self.state = FTDSignal.WATCHING
+            else:
+                # a day that gained enough either is the Follow Through Day or is blocked by
+                # one of the remaining clauses, which is worth recording either way
+                gained = self._has_ftd_gain(i)
+                self.ftd_block = (self._ftd_block(i) or None) if gained else None
+                if gained and self.ftd_block is None:
+                    # the Follow Through Day confirms the attempt; it wins over the timeout on
+                    # the last day of the window
+                    self.events.append('FTD')
+                    self.ftd_i, self.ftd_rally_low = i, self.rally_low
+                    self.ftd_rally_day = self.rally_day
+                    self.ftd_peak, self.ftd_peak_i = self.H[i], i
+                    self._end_attempt()
+                    self.state = FTDSignal.UPTREND
+                    return True
+                elif self.rally_day >= self.s.ftd_max_days:
+                    # timeout: no Follow Through Day by the end of the window. Like the
+                    # undercut, the day falls through to the day 0 search.
+                    self.events.append('TIMEOUT')
+                    self._end_attempt()
+                    self.state = FTDSignal.WATCHING
 
         elif self.state == FTDSignal.UPTREND:
             if self.C[i] < self.ftd_rally_low:
                 # failed Follow Through Day: the original correction is still in force, so the
                 # peak is kept and the day falls through to the day 0 search
+                self.events.append('FTD_FAILED')
                 self._end_uptrend()
                 self.state = FTDSignal.WATCHING
-            elif self._is_day0(i, self.ftd_peak, self.ftd_peak_i):
+            elif self._try_day0(i, self.ftd_peak, self.ftd_peak_i):
                 # a new correction, measured from the highest high since the Follow Through Day
+                self.events.insert(0, 'NEW_CORRECTION')
                 self.peak, self.peak_i = self.ftd_peak, self.ftd_peak_i
                 self._end_uptrend()
                 self._open_day0(i)
@@ -381,15 +459,17 @@ class _FTDMachine:
             if self.L[i] < self.rally_low:
                 # until day 1 arrives a lower low becomes the new day 0, even if it closes up -
                 # so this day cannot also be day 1
+                self.events.append('DAY0_LOWERED')
                 self.day0_i, self.rally_low = i, self.L[i]
                 return False
             if self.C[i] > self.C[i - 1]:
                 # day 1, the First Day of the Rally; the rally low is fixed from here on
+                self.events.append('DAY1')
                 self.rally_day = 1
                 self.state = FTDSignal.RALLY
             return False
 
-        if self.state == FTDSignal.WATCHING and self._is_day0(i, self.peak, self.peak_i):
+        if self.state == FTDSignal.WATCHING and self._try_day0(i, self.peak, self.peak_i):
             self._open_day0(i)
         return False
 
@@ -410,7 +490,10 @@ class _FTDMachine:
                 'day0_date': None if self.day0_i is None else self.dates[self.day0_i],
                 'rally_low': rally_low,
                 'rally_day': rally_day,
-                'ftd_date': None if self.ftd_i is None else self.dates[self.ftd_i]}
+                'ftd_date': None if self.ftd_i is None else self.dates[self.ftd_i],
+                'event': '+'.join(self.events) or None,
+                'day0_block': self.day0_block,
+                'ftd_block': self.ftd_block}
 
 
 class FTDSignal(Signal):
@@ -454,7 +537,18 @@ class FTDSignal(Signal):
         The state machine runs on the prices of 'index', loaded from the environment the
         strategy runs in (see Signal.bind) over the underlying's trading period; index=None
         runs it on the underlying's own prices. The returned dataframe keeps the index close,
-        the state and the peak, day 0, rally low and rally day it is working with next to 'es'.
+        the state and the peak, day 0, rally low and rally day it is working with next to 'es',
+        and three columns that say what the machine did with the day and why:
+
+          event       the transitions the day made - DAY0, DAY0_LOWERED, DAY1, UNDERCUT,
+                      TIMEOUT, FTD, FTD_FAILED, NEW_CORRECTION - joined with '+' when a day
+                      makes more than one, e.g. UNDERCUT+DAY0. 'es' is on exactly on the days
+                      whose event contains FTD.
+          day0_block  on a day that makes a new day0_window low but is not a day 0: the
+                      clauses of the correction precondition it fails, DECLINE, PEAK_AGE or
+                      both.
+          ftd_block   on a rally day that gains ftd_min_gain but is not a Follow Through Day:
+                      TOO_EARLY, VOLUME or both.
     """
     WATCHING = "WATCHING"
     DAY0 = "DAY0"
@@ -505,6 +599,25 @@ class FTDSignal(Signal):
             raise ValueError(f"{self.name}: no {self.index} prices between {first} and {last}.")
         return rv
 
+    @staticmethod
+    def _move_marks(values, calendar):
+        """
+            Moves the one day marks of the index's days onto the underlying's calendar: a mark
+            made on a day the underlying did not trade belongs to its next trading day, and
+            marks that end up on the same day are joined.
+        :param values: the marked column, indexed by the index's days
+        :return: dict of day -> mark, over the days that carry one
+        """
+        rv = {}
+        for day, value in values.items():
+            if value is None or (isinstance(value, float) and math.isnan(value)):
+                continue
+            i = calendar.searchsorted(day, side='left')
+            if i < len(calendar):
+                target = calendar[i]
+                rv[target] = _join_marks([rv[target], value]) if target in rv else value
+        return rv
+
     def _align(self, rv, calendar):
         """
             Puts the index's daily values on the underlying's trading calendar. A day the
@@ -513,9 +626,12 @@ class FTDSignal(Signal):
             (no rally attempt is under way, say) stays empty. 'es' never carries over: it is a
             one day pulse and has to fire exactly once per Follow Through Day. A Follow
             Through Day the underlying did not trade fires on its next trading day, so that
-            the entry signal is not lost.
+            the entry signal is not lost. The event and block columns mark a single day the
+            same way and are moved the same way, so that the reason for a pulse - or for the
+            absence of one - is not carried over or lost either.
         """
         ftd_days = list(rv.index[rv.es])
+        marks = {column: self._move_marks(rv[column], calendar) for column in _FTD_MARK_COLUMNS}
         rv = rv.reindex(calendar)
         did_not_trade = rv.state.isna()     # the machine leaves no row without a state
         rv = rv.mask(did_not_trade, rv.ffill(), axis=0)
@@ -526,6 +642,8 @@ class FTDSignal(Signal):
             if i < len(calendar):
                 rv.iloc[i, rv.columns.get_loc('es')] = True
         rv['es'] = rv.es.astype(bool)
+        for column, moved in marks.items():
+            rv[column] = [moved.get(day) for day in calendar]
         return rv
 
     def _call_impl(self, ohlcv):

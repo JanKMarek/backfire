@@ -1,3 +1,49 @@
+# September 21, 2026 - signal analysis report
+
+Added `backfire/report_signal.py`, a CLI that writes a static HTML report about one signal over
+one underlying, and the two things it is built on.
+
+```
+uv run python backfire/report_signal.py --underlying QQQ --start_date 1999-03-10 \
+    --signal strategies/signals/ftd.yaml --out out/ftd_report
+```
+
+The report answers two questions separately. *Does every firing follow the rules?* - a gallery of
+one annotated chart per episode, the reference dates first (matched, then missed), then the
+candidates, then the firings no reference accounts for; each shows the peak and the decline to
+Day 0, the rally low, the rally day numbers, the follow-through day, × marks on the days blocked
+from being a Day 0 or a follow-through day with the reason on hover, and a band of the state
+machine's state. *Does a firing mark a real turnaround?* - a scorecard of forward returns against
+two baselines (every day, and "naive follow-through days" with none of the correction or day
+count logic), the average forward path with an interquartile band, and a parameter sensitivity
+table. Forward returns are measured from the next day's open, the way `SignalDrivenStrategy`
+executes a signal. Next to `report.html` the run writes `episodes.csv`, `references.csv` and the
+signal's daily values. See the README for the full description.
+
+- **`FTDSignal` now explains itself.** Three columns join the daily values: `event` (the
+  transitions the day made - `DAY0`, `DAY0_LOWERED`, `DAY1`, `UNDERCUT`, `TIMEOUT`, `FTD`,
+  `FTD_FAILED`, `NEW_CORRECTION`, joined with `+` when a day makes more than one), `day0_block`
+  (`DECLINE` / `PEAK_AGE`, on a new low that was not a Day 0) and `ftd_block` (`TOO_EARLY` /
+  `VOLUME`, on a rally day that gained enough but was not a follow-through day). `es` is on
+  exactly where `event` contains `FTD`. The rules themselves did not change: the same 62 firings
+  on QQQ. Like `es`, the three mark a single day - never carried over, and moved to the next
+  trading day when the underlying did not trade.
+- **The reference dates are data.** `docs/ftd_reference.yaml` holds the 12 reference and 29
+  candidate follow-through days that `docs/SIGNALS.md` tabulates, and is now the copy the code
+  reads - the integration test and the report both take it from there. The tables in SIGNALS.md
+  stay for reading.
+- **`backfire/signal_analysis.py`** is the pure pandas layer under the report, usable from a
+  notebook: `extract_episodes`, `forward_outcomes`, `forward_paths`, `baseline_dates`,
+  `match_references` and `sensitivity`. Only `extract_episodes` is specific to the follow-through
+  day; the rest work off any signal's rising edges.
+
+One documentation error came out of this. `docs/SIGNALS.md` recorded the Sep 2010 reference as
+out of reach because the late-August decline never reached 8% below the Aug 9 high. It does reach
+8.9%; what rejects it is the age of that high - 14 trading days before the Aug 27 low, short of
+the 20 required. The recorded reason is `PEAK_AGE`, as it is for 2009 and 2022, and SIGNALS.md
+has been corrected. The integration test now asserts the recorded reason for all four
+unreachable references rather than only that they are unreachable.
+
 # September 21, 2026
 
 Reimplemented `FTDSignal` against the specification in `docs/SIGNALS.md` as an explicit four

@@ -1,0 +1,12 @@
+# The Follow Through Day signal with the default parameters of docs/SIGNALS.md, run on the
+# underlying's own prices. Set 'index' to a ticker (e.g. IXIC) to run the state machine on
+# that index instead, as a strategy trading a leveraged ETF would.
+signal:
+  name: FTDSignal
+  index: null # will use the underlying
+  min_decline: 0.08 # of the day 0 low below the peak
+  min_peak_age_days: 20 # trading days
+  day0_window: 5 # trading days
+  ftd_min_gain: 0.0125
+  ftd_min_days: 4 # trading days
+  ftd_max_days: 25 # trading days

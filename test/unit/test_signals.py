@@ -563,6 +563,116 @@ def test_a_decline_from_a_too_young_post_follow_through_day_high_does_not_re_arm
     assert rv.peak_date.tolist()[11] == rv.index[8]
 
 
+# --- the machine explaining itself -----------------------------------------------------
+
+def marks(rv, column='event'):
+    """ One of the mark columns as a list, with an empty string on the days without one. """
+    return rv[column].fillna('').tolist()
+
+
+def test_a_qualifying_new_low_is_recorded_as_day0():
+    rv = ftd()(bars(DECLINE_AND_RALLY[:4]))
+
+    assert marks(rv) == ['', '', '', 'DAY0']
+
+
+def test_a_lower_low_before_day1_is_recorded_as_day0_lowered():
+    rv = ftd()(bars([100.0, 98.0, 96.0, 93.0, 92.0]))
+
+    assert marks(rv) == ['', '', '', 'DAY0', 'DAY0_LOWERED']
+
+
+def test_the_first_up_close_after_day0_is_recorded_as_day1():
+    rv = ftd()(bars(DECLINE_AND_RALLY[:5]))
+
+    assert marks(rv) == ['', '', '', 'DAY0', 'DAY1']
+
+
+def test_an_undercutting_day_that_is_the_next_day0_records_both():
+    rv = ftd()(bars([100.0, 98.0, 96.0, 93.0, 94.0, 94.5, 91.5]))
+
+    assert marks(rv)[6] == 'UNDERCUT+DAY0'
+
+
+def test_the_end_of_the_window_is_recorded_as_a_timeout():
+    closes = [100.0, 98.0, 96.0, 93.0, 94.0, 94.2, 94.4, 94.6, 94.8, 94.9]
+    rv = ftd()(bars(closes, volumes=[100.0] * 9 + [200.0]))
+
+    assert marks(rv)[9] == 'TIMEOUT'
+
+
+def test_the_follow_through_day_is_recorded_as_ftd():
+    rv = ftd()(bars(DECLINE_AND_RALLY, volumes=FTD_VOLUMES))
+
+    assert marks(rv)[7] == 'FTD'
+
+
+def test_a_close_below_the_confirmed_rally_low_is_recorded_as_a_failed_follow_through_day():
+    rv = ftd()(bars(DECLINE_AND_RALLY + [91.5], volumes=FTD_VOLUMES + [100.0]))
+
+    assert marks(rv)[8] == 'FTD_FAILED+DAY0'
+
+
+def test_re_arming_on_a_decline_from_the_high_since_is_recorded_as_a_new_correction():
+    closes = DECLINE_AND_RALLY + [100.0, 105.0, 110.0, 108.0, 105.0, 102.0]
+    rv = ftd()(bars(closes, volumes=FTD_VOLUMES + [100.0] * 6))
+
+    assert marks(rv)[13] == 'NEW_CORRECTION+DAY0'
+
+
+def test_a_new_low_too_shallow_to_be_day0_records_the_decline_block():
+    rv = ftd()(bars([100.0, 98.0, 96.0, 95.0, 94.5]))
+
+    assert marks(rv, 'day0_block')[4] == 'DECLINE'
+    assert marks(rv) == [''] * 5
+
+
+def test_a_new_low_below_a_peak_too_young_records_the_peak_age_block():
+    rv = ftd(day0_window=1)(bars([100.0, 90.0, 91.0, 90.5]))
+
+    # days 1 and 2 are deep enough below the peak but too close to it
+    assert marks(rv, 'day0_block')[1:] == ['PEAK_AGE', 'PEAK_AGE', '']
+    assert marks(rv) == ['', '', '', 'DAY0']
+
+
+def test_a_new_low_that_fails_both_clauses_records_both():
+    # day 1 is neither 8% below the peak nor far enough from it
+    rv = ftd(day0_window=1)(bars([100.0, 95.0, 90.0, 89.0]))
+
+    assert marks(rv, 'day0_block')[1] == 'DECLINE+PEAK_AGE'
+
+
+def test_a_gain_on_day_2_or_3_of_the_attempt_records_the_too_early_block():
+    closes = [100.0, 98.0, 96.0, 93.0, 94.0, 96.5, 98.5]
+    rv = ftd()(bars(closes, volumes=[100.0] * 5 + [200.0, 300.0]))
+
+    assert marks(rv, 'ftd_block') == [''] * 5 + ['TOO_EARLY', 'TOO_EARLY']
+    assert not rv.es.any()
+
+
+def test_a_gain_on_flat_volume_records_the_volume_block():
+    rv = ftd()(bars(DECLINE_AND_RALLY))     # a flat 100 throughout
+
+    assert marks(rv, 'ftd_block')[7] == 'VOLUME'
+    assert not rv.es.any()
+
+
+def test_a_rally_day_without_the_gain_is_not_blocked_it_is_simply_not_a_candidate():
+    rv = ftd()(bars(DECLINE_AND_RALLY[:7], volumes=[100.0] * 5 + [200.0, 300.0]))
+
+    assert marks(rv, 'ftd_block') == [''] * 7
+
+
+def test_the_signal_is_on_exactly_on_the_days_whose_event_contains_ftd():
+    rv = ftd()(bars(TWO_FTDS, volumes=TWO_FTDS_VOLUMES))
+
+    fired = [i for i, event in enumerate(marks(rv)) if 'FTD' in event.split('+')]
+    assert fired == [7, 12]
+    assert [i for i, on in enumerate(rv.es) if on] == fired
+    # FTD_FAILED is a transition of its own and must not be read as a pulse
+    assert marks(rv)[8] == 'FTD_FAILED+DAY0'
+
+
 # --- running on a separate index -------------------------------------------------------
 
 @pytest.fixture
@@ -603,6 +713,8 @@ def test_the_pulse_is_not_repeated_on_a_day_the_index_did_not_trade(index_md):
 
     assert rv.es.tolist() == [False] * 7 + [True, False]
     assert rv.state.tolist()[-1] == U       # the state does carry over
+    # the event does not carry over either
+    assert marks(rv) == ['', '', '', 'DAY0', 'DAY1', '', '', 'FTD', '']
 
 
 def test_a_follow_through_day_the_underlying_missed_fires_on_its_next_trading_day(index_md):
@@ -616,6 +728,8 @@ def test_a_follow_through_day_the_underlying_missed_fires_on_its_next_trading_da
     rv = signal(underlying)
 
     assert rv.es.tolist() == [False] * 7 + [True]
+    # the event moves with the pulse, onto the next day the underlying traded
+    assert marks(rv) == ['', '', '', 'DAY0', 'DAY1', '', '', 'FTD']
 
 
 def test_ftd_on_an_index_needs_an_environment():
