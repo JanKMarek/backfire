@@ -1,12 +1,12 @@
 # Workitems
 
 ## Done
-- FTD signal analysis report (#11): `backfire/report_signal.py` with the episode gallery and the
+- FTD signal analysis report (#11): `backfire/ftd_signal_verification_report.py` with the episode gallery and the
   scorecard, `backfire/signal_analysis.py` under it, `docs/ftd_reference.yaml` as the source of
   the reference dates, and the `event` / `day0_block` / `ftd_block` diagnostics on `FTDSignal`.
 
 ## Open
-- interactive signal dashboard (#6). The chart annotations in `report_signal.panel_figure` are
+- interactive signal dashboard (#6). The chart annotations in `ftd_signal_verification_report.panel_figure` are
   meant to be reused for it.
 - `backfire/visualize_signal.py` - the README documents it but it does not exist yet.
 - implement vibha jha's TQQQ strategy (essentially FTD-21d) 

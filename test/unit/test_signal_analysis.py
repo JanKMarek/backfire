@@ -9,13 +9,17 @@ from backfire.signal_analysis import (
     baseline_dates,
     extract_episodes,
     failure_rate,
+    false_positive_dates,
     forward_outcomes,
     forward_paths,
     forward_table,
+    load_ground_truth,
     load_references,
-    match_references,
+    load_turnaround_points,
+    match_ground_truth,
     pulse_dates,
     sensitivity,
+    verification_stats,
 )
 from backfire.signals import FTDSignal
 
@@ -237,7 +241,7 @@ def test_the_forward_table_has_a_row_per_named_set_of_days(rising):
     assert rv.loc['signal', 'positive at 2d'] == 1.0
 
 
-# --- the reference dates ---------------------------------------------------------------
+# --- the ground truth dates --------------------------------------------------------------
 
 def reference(day, kind='reference', **kwargs):
     rv = {'date': day, 'episode': 'test', 'day1': None, 'kind': kind,
@@ -246,55 +250,149 @@ def reference(day, kind='reference', **kwargs):
     return rv
 
 
-def test_a_reference_within_the_tolerance_is_a_hit_and_carries_the_gap():
+def test_a_firing_within_the_tolerance_is_a_hit_and_carries_the_gap():
     ohlcv, sv = run(DECLINE_AND_RALLY, FTD_VOLUMES)       # the pulse is on day 7
 
-    rv = match_references(sv, [reference(ohlcv.index[5])], tolerance=3)
+    rv = match_ground_truth(sv, [reference(ohlcv.index[5])], early=1, late=3)
 
     assert rv.iloc[0].hit
     assert (rv.iloc[0].detected, rv.iloc[0].gap) == (ohlcv.index[7], 2)
     assert rv.iloc[0].in_data
+    assert rv.iloc[0].reason == ''
 
 
-def test_a_reference_outside_the_tolerance_is_a_miss_that_carries_the_state_and_the_blocks():
+def test_the_tolerance_is_asymmetric_early_and_late():
+    # the pulse is on day 7, and the drift up after it fires nothing more
+    ohlcv, sv = run(DECLINE_AND_RALLY + [97.0, 98.0, 99.0], FTD_VOLUMES + [100.0] * 3)
+
+    late = match_ground_truth(sv, [reference(ohlcv.index[4])], early=1, late=3)      # +3
+    too_late = match_ground_truth(sv, [reference(ohlcv.index[3])], early=1, late=3)  # +4
+    early = match_ground_truth(sv, [reference(ohlcv.index[8])], early=1, late=3)     # -1
+    too_early = match_ground_truth(sv, [reference(ohlcv.index[9])], early=1, late=3) # -2
+
+    assert late.iloc[0].hit and early.iloc[0].hit
+    assert not too_late.iloc[0].hit and not too_early.iloc[0].hit
+    assert too_late.iloc[0].reason == f"fired 4d late ({ohlcv.index[7]})"
+    assert too_early.iloc[0].reason == f"fired 2d early ({ohlcv.index[7]})"
+
+
+def test_a_firing_counts_for_one_ground_truth_date_only():
+    ohlcv, sv = run(DECLINE_AND_RALLY, FTD_VOLUMES)       # the pulse is on day 7
+
+    rv = match_ground_truth(sv, [reference(ohlcv.index[7]), reference(ohlcv.index[6])],
+                            early=1, late=3)
+
+    # the dates are taken in order, so day 6 claims the firing and day 7 is left without
+    assert rv.date.tolist() == [ohlcv.index[6], ohlcv.index[7]]
+    assert rv.hit.tolist() == [True, False]
+    assert rv.iloc[1].reason == f"fired on the day ({ohlcv.index[7]}), already matched " \
+                                f"to {ohlcv.index[6]}"
+    assert rv.iloc[1].nearest == ohlcv.index[7]
+
+
+def test_a_near_miss_is_explained_by_the_firing_close_by():
     ohlcv, sv = run(DECLINE_AND_RALLY, FTD_VOLUMES)
 
-    rv = match_references(sv, [reference(ohlcv.index[1])], tolerance=2)
+    rv = match_ground_truth(sv, [reference(ohlcv.index[1])], early=0, late=0)
 
     assert not rv.iloc[0].hit
     assert rv.iloc[0].state == FTDSignal.WATCHING
+    # day 7 fires, 6 days on, which is close enough to be named as the reason
+    assert rv.iloc[0].reason == f"fired 6d late ({ohlcv.index[7]})"
+
+
+def test_a_miss_in_an_uptrend_names_the_follow_through_day_it_is_still_in():
+    closes = DECLINE_AND_RALLY + [97.0 + i for i in range(12)]
+    ohlcv, sv = run(closes, FTD_VOLUMES + [100.0] * 12)
+
+    rv = match_ground_truth(sv, [reference(ohlcv.index[19])], early=1, late=3)
+
+    assert rv.iloc[0].state == FTDSignal.UPTREND
+    assert rv.iloc[0].reason == f"still in the uptrend of the {ohlcv.index[7]} follow " \
+                                f"through day"
+
+
+def test_a_miss_while_watching_names_the_clause_that_blocked_the_day0():
+    ohlcv, sv = run(DECLINE_AND_RALLY)      # flat volume: nothing ever fires
+
+    rv = match_ground_truth(sv, [reference(ohlcv.index[1])], early=1, late=3)
+
+    assert not rv.iloc[0].hit
+    assert rv.iloc[0].nearest is None
     assert 'PEAK_AGE' in rv.iloc[0].day0_blocks
+    assert rv.iloc[0].reason == f"no day 0: {rv.iloc[0].day0_blocks}"
 
 
-def test_a_rally_day_blocked_from_being_a_follow_through_day_shows_in_the_window():
+def test_a_miss_in_a_rally_attempt_names_the_clause_that_blocked_the_follow_through():
     ohlcv, sv = run(DECLINE_AND_RALLY)      # flat volume, so day 7 is blocked
 
-    rv = match_references(sv, [reference(ohlcv.index[7])], tolerance=2)
+    rv = match_ground_truth(sv, [reference(ohlcv.index[7])], early=1, late=3)
 
-    assert not rv.iloc[0].hit               # no pulse anywhere in the data
+    assert not rv.iloc[0].hit
     assert rv.iloc[0].ftd_blocks == 'VOLUME'
+    assert rv.iloc[0].reason == "in the rally attempt (day 4): follow through blocked by VOLUME"
 
 
-def test_a_reference_the_data_does_not_cover_is_neither_a_hit_nor_a_miss():
+def test_a_date_the_data_does_not_cover_is_neither_a_hit_nor_a_miss():
     _, sv = run(DECLINE_AND_RALLY, FTD_VOLUMES)
 
-    rv = match_references(sv, [reference(date(1990, 1, 1))])
+    rv = match_ground_truth(sv, [reference(date(1990, 1, 1))])
 
     assert not rv.iloc[0].in_data
     assert not rv.iloc[0].hit
     assert pd.isna(rv.iloc[0].gap)
+    assert rv.iloc[0].reason == 'outside the data'
 
 
-def test_the_match_table_keeps_the_reference_fields_for_the_report():
+def test_the_match_table_keeps_the_ground_truth_fields_for_the_report():
     ohlcv, sv = run(DECLINE_AND_RALLY, FTD_VOLUMES)
-    ref = reference(ohlcv.index[7], kind='candidate', episode='Covid crash',
+    ref = reference(ohlcv.index[7], kind='turnaround', episode='Covid crash',
                     confidence='medium', notes='off the low')
 
-    rv = match_references(sv, [ref])
+    rv = match_ground_truth(sv, [ref])
 
     assert rv.iloc[0].episode == 'Covid crash'
     assert (rv.iloc[0].kind, rv.iloc[0].confidence, rv.iloc[0].notes) == \
-        ('candidate', 'medium', 'off the low')
+        ('turnaround', 'medium', 'off the low')
+
+
+def test_the_statistics_count_positives_against_the_dates_the_data_covers():
+    ohlcv, sv = run(DECLINE_AND_RALLY, FTD_VOLUMES)       # one firing, on day 7
+    truth = [reference(ohlcv.index[7]), reference(ohlcv.index[1]), reference(date(1990, 1, 1))]
+    matches = match_ground_truth(sv, truth, early=1, late=3)
+    pulses = pulse_dates(sv)
+
+    stats = verification_stats(matches, pulses, len(sv))
+
+    assert (stats['ground_truth'], stats['ground_truth_total']) == (2, 3)
+    assert (stats['positives'], stats['true_positives'], stats['false_positives']) == (1, 1, 0)
+    assert stats['trading_days'] == len(sv)
+    assert stats['precision'] == pytest.approx(1.0)
+    assert stats['recall'] == pytest.approx(0.5)
+    assert stats['f1'] == pytest.approx(2 / 3)
+    assert false_positive_dates(matches, pulses) == []
+
+
+def test_a_firing_no_date_claims_is_a_false_positive():
+    ohlcv, sv = run(DECLINE_AND_RALLY, FTD_VOLUMES)
+    matches = match_ground_truth(sv, [reference(ohlcv.index[1])], early=0, late=0)
+    pulses = pulse_dates(sv)
+
+    stats = verification_stats(matches, pulses, len(sv))
+
+    assert (stats['true_positives'], stats['false_positives']) == (0, 1)
+    assert stats['precision'] == 0.0 and stats['recall'] == 0.0
+    assert pd.isna(stats['f1'])
+    assert false_positive_dates(matches, pulses) == [ohlcv.index[7]]
+
+
+def test_the_rates_are_undefined_without_firings_or_dates():
+    _, sv = run(DECLINE_AND_RALLY)          # nothing fires
+    matches = match_ground_truth(sv, [])
+
+    stats = verification_stats(matches, pulse_dates(sv), len(sv))
+
+    assert pd.isna(stats['precision']) and pd.isna(stats['recall']) and pd.isna(stats['f1'])
 
 
 # --- the reference file ----------------------------------------------------------------
@@ -335,6 +433,51 @@ def test_the_reference_file_must_hold_a_follow_through_days_list(tmp_path):
         load_references(str(path))
 
 
+def test_the_turnaround_points_are_read_from_the_commented_csv(tmp_path):
+    path = tmp_path / "turns.csv"
+    path.write_text("#\n# Major turnaround points.\n#\n\nDate,Notes\n"
+                    "2020-04-02,Covid\n2020-11-04,\"Day after the election, off the low\"\n"
+                    "2026-08-03,\n")
+
+    rv = load_turnaround_points(str(path))
+
+    assert [entry['date'] for entry in rv] == [date(2020, 4, 2), date(2020, 11, 4),
+                                               date(2026, 8, 3)]
+    assert [entry['kind'] for entry in rv] == ['turnaround'] * 3
+    assert rv[1]['notes'] == "Day after the election, off the low"
+    assert rv[2]['notes'] is None
+
+
+def test_the_turnaround_file_must_have_a_date_column(tmp_path):
+    path = tmp_path / "turns.csv"
+    path.write_text("Day,Notes\n2020-04-02,Covid\n")
+
+    with pytest.raises(ValueError, match="'Date' column"):
+        load_turnaround_points(str(path))
+
+
+def test_the_ground_truth_is_read_by_name_or_by_file_extension(tmp_path):
+    csv = tmp_path / "turns.csv"
+    csv.write_text("Date,Notes\n2020-11-04,election\n2020-04-02,Covid\n")
+    yaml_path = write_references(tmp_path, [
+        {'date': date(2020, 4, 2), 'kind': 'reference'},
+        {'date': date(2020, 11, 4), 'kind': 'candidate'}])
+
+    turns = load_ground_truth(str(csv))
+    ibd = load_ground_truth(yaml_path)
+
+    assert [entry['date'] for entry in turns] == [date(2020, 4, 2), date(2020, 11, 4)]  # sorted
+    assert [entry['date'] for entry in ibd] == [date(2020, 4, 2)]     # candidates left out
+    # the two names read the files in docs/
+    assert all(entry['kind'] == 'turnaround' for entry in load_ground_truth('turnarounds'))
+    assert all(entry['kind'] == 'reference' for entry in load_ground_truth('ibd'))
+
+
+def test_an_unknown_ground_truth_is_refused():
+    with pytest.raises(ValueError, match="'turnarounds', 'ibd' or a .csv/.yaml file"):
+        load_ground_truth("dates.txt")
+
+
 # --- the parameter grid ----------------------------------------------------------------
 
 def test_the_sensitivity_grid_runs_the_base_setting_and_one_parameter_away_from_it():
@@ -347,18 +490,8 @@ def test_the_sensitivity_grid_runs_the_base_setting_and_one_parameter_away_from_
 
     assert rv.setting.tolist() == ['base', 'ftd_min_gain=0.05']   # the base value is not re-run
     assert rv.pulses.tolist() == [1, 0]
-    assert rv.references_hit.tolist() == [1, 0]
-    assert rv.references.tolist() == [1, 1]
+    assert rv.hits.tolist() == [1, 0]
+    assert rv.ground_truth.tolist() == [1, 1]
+    assert rv.precision.tolist()[0] == pytest.approx(1.0)
+    assert rv.recall.tolist() == pytest.approx([1.0, 0.0])
     assert 'median r2' in rv.columns
-
-
-def test_the_sensitivity_grid_counts_only_the_references_not_the_candidates():
-    ohlcv = bars(DECLINE_AND_RALLY, volumes=FTD_VOLUMES)
-    refs = [reference(ohlcv.index[7]), reference(ohlcv.index[7], kind='candidate')]
-
-    rv = sensitivity(ohlcv, {}, refs,
-                     base_params=dict(index=None, min_decline=0.08, min_peak_age_days=3,
-                                      day0_window=3, ftd_min_gain=0.02, ftd_min_days=4,
-                                      ftd_max_days=6))
-
-    assert rv.references.tolist() == [1]

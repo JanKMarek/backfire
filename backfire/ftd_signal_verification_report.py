@@ -1,13 +1,13 @@
 """
-    Command line driver for the signal analysis report.
+    Command line driver for the FTD signal verification report.
 
-    Runs one signal over one underlying and writes a static HTML report that answers two
-    questions about it: does every firing follow the rules, and does a firing mark a real
-    turnaround?
+    Runs one signal over one underlying, scores its firings against a set of ground truth
+    dates and writes a static HTML report - docs/SIGNALS.md, 'Signal verification', is the
+    specification.
 
-      uv run python backfire/report_signal.py --underlying QQQ --start_date 1999-03-10 \
-          --signal strategies/signals/ftd.yaml --signal.min_peak_age_days=15 \
-          --out out/ftd_report
+      uv run python backfire/ftd_signal_verification_report.py --underlying QQQ --start_date 1999-03-10 \
+          --signal strategies/signals/ftd.yaml --ground_truth turnarounds \
+          --out out/ftd_verification
 
     The signal file names the class and its constructor arguments, the same catalog
     backtest.py builds a strategy from:
@@ -25,17 +25,31 @@
     Any entry can be overridden per run with --signal.<name>=<value>, read as YAML so types
     are kept; with no --signal file the overrides define the signal on their own.
 
-    The report has three parts:
-      - a header with the signal, its parameters, the period, the number of firings and how
-        many of the reference dates in docs/ftd_reference.yaml were hit
-      - a scorecard: the reference and candidate match table, how the rally attempts ended,
-        what the market did after a firing against two baselines, the average forward path,
-        the rally day the Follow Through Day lands on, and the sensitivity to the parameters
-      - a gallery: one annotated chart per episode - the references first, matched then
-        missed, then the candidates, then the remaining firings - so that every call, and
-        every miss, can be looked at
+    The ground truth is one of two things. 'turnarounds' - docs/turnaround_points.csv, the
+    market turnarounds picked with hindsight - asks whether the signal meets its intent;
+    'ibd' - the reference calls of docs/ftd_reference.yaml - asks whether it fires when IBD
+    called a Follow Through Day. A firing matches a ground truth date when it is at most
+    --early_days trading days before it or --late_days after it (1 and 3 by default); a
+    positive is a firing, a true positive a firing that matched, and each firing can match
+    only one date.
 
-    Next to report.html the run writes episodes.csv, references.csv and the signal values.
+    The report lists:
+      - the parameters of the signal run and of the verification
+      - the statistics: ground truth dates, positives, trading days, true and false
+        positives, precision, recall and F1
+      - the scorecard: the ground truth dates and the false positives in one table, in date
+        order - a ground truth date with the firing that matched it, or the reason nothing
+        did, and the note recorded for the date; a false positive with its firing
+      - what followed a firing: the average path of the underlying up to 60 trading days out,
+        and the forward returns against two baselines
+      - the rally attempts: how they ended, the rally day the Follow Through Day lands on,
+        and the attempts that were never confirmed
+      - the sensitivity of the statistics to the parameters, one parameter away at a time
+      - the gallery: one annotated chart per ground truth date and per false positive, each
+        linked from the scorecard
+
+    Next to ftd_signal_verification_report.html the run writes scorecard.csv, episodes.csv
+    and the signal values.
 """
 
 import argparse
@@ -56,11 +70,13 @@ from backfire.backtest import SIGNALS, apply_overrides, build_component
 from backfire.base import Environment
 from backfire.signals import FTDSignal
 
+REPORT_NAME = "ftd_signal_verification_report"
 # how many bars of context a gallery panel shows on each side of its episode
 CONTEXT_BARS = 60
-# how far from a reference date a firing still counts as a hit, in trading days
-TOLERANCE_TRADING_DAYS = 10
+# the horizons the forward returns are measured at, in trading days; the average path is
+# followed to the longest and a panel caption quotes the middle one
 FORWARD_HORIZONS = (5, 20, 60)
+CAPTION_HORIZON = FORWARD_HORIZONS[1]
 # the grid the sensitivity table walks, one parameter away from the run's own setting
 SENSITIVITY_GRID = {'min_decline': [0.08, 0.10],
                     'min_peak_age_days': [15, 20, 25],
@@ -72,6 +88,9 @@ _STATE_COLORS = {FTDSignal.WATCHING: '#c9ccd1', FTDSignal.DAY0: '#e8a33d',
 _UP, _DOWN = '#26a69a', '#ef5350'
 _PEAK, _FTD_MARK, _REFERENCE = '#8e44ad', '#2e7d32', '#555555'
 _DAY0_BLOCK, _FTD_BLOCK = '#e8a33d', '#c62828'
+
+_GROUND_TRUTH_LABELS = {'turnarounds': "turnaround points - does the signal meet its intent?",
+                        'ibd': "IBD reference calls - does the signal fire when IBD did?"}
 
 
 # ----------------------------------------------------------------------------------
@@ -123,13 +142,21 @@ def _valid_date(value):
     return value
 
 
+def _days(value):
+    days = int(value)
+    if days < 0:
+        raise argparse.ArgumentTypeError(f"'{value}' must be a number of days, 0 or more.")
+    return days
+
+
 def parse_args(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     argv, overrides = split_signal_overrides(argv)
 
     p = argparse.ArgumentParser(
-        prog="report_signal.py",
-        description="Write a static HTML analysis report for one signal over one underlying.")
+        prog="ftd_signal_verification_report.py",
+        description="Write the FTD signal verification report: one signal over one "
+                    "underlying, scored against a set of ground truth dates.")
     p.add_argument("--underlying", required=True, help="ticker the signal is run over, e.g. QQQ")
     p.add_argument("--start_date", required=True, type=_valid_date,
                    help="first day of the period, YYYY-MM-DD")
@@ -139,8 +166,16 @@ def parse_args(argv=None):
                    help="market data directory (default: ./md)")
     p.add_argument("--signal", default=None,
                    help="path to the signal definition YAML file")
-    p.add_argument("--references", default=None,
-                   help="the reference date file (default: docs/ftd_reference.yaml)")
+    p.add_argument("--ground_truth", default="turnarounds",
+                   help="'turnarounds' (docs/turnaround_points.csv), 'ibd' (the reference "
+                        "calls of docs/ftd_reference.yaml), or the path of a file in either "
+                        "format (default: turnarounds)")
+    p.add_argument("--early_days", default=sa.EARLY_DAYS, type=_days,
+                   help=f"a firing this many trading days before a ground truth date still "
+                        f"matches it (default: {sa.EARLY_DAYS})")
+    p.add_argument("--late_days", default=sa.LATE_DAYS, type=_days,
+                   help=f"a firing this many trading days after a ground truth date still "
+                        f"matches it (default: {sa.LATE_DAYS})")
     p.add_argument("--out", required=True, help="output folder for the report")
 
     args = p.parse_args(argv)
@@ -198,74 +233,51 @@ def panel_key(kind, day):
     return f"{kind}-{sa.as_date(day).isoformat()}"
 
 
-def gallery_entries(matches, episodes, tolerance=TOLERANCE_TRADING_DAYS):
+def gallery_entries(matches, episodes, pulses):
     """
-        The panels of the gallery and the order they are shown in: the reference dates,
-        matched before missed, then the candidate dates, then the firings no reference or
-        candidate accounts for.
+        The panels of the gallery and the order they are shown in: one per ground truth date
+        the data covers, in the order of the scorecard, then one per false positive.
 
-    :param matches: the match table, as signal_analysis.match_references returns it
+    :param matches: the match table, as signal_analysis.match_ground_truth returns it
     :param episodes: the rally attempts, as signal_analysis.extract_episodes returns them
-    :return: list of dicts with 'key', 'group', 'kind', 'date', 'match' (the match row or
-             None) and 'episode' (the confirmed attempt shown, or None)
+    :param pulses: the firing dates, as signal_analysis.pulse_dates returns them
+    :return: list of dicts with 'key', 'group' ('truth' or 'fp'), 'date', 'match' (the match
+             row or None) and 'episode' (the confirmed attempt shown, or None)
     """
     ftds = episodes[episodes.outcome == 'FTD']
-    by_ftd_date = {row.ftd_date: row for row in ftds.itertuples()}
-    reference_dates = set(matches.date[matches.kind == 'reference'])
+    by_ftd_date = {sa.as_date(row.ftd_date): row for row in ftds.itertuples()}
 
-    rv, shown = [], set()
-    for group, rows in [('reference', matches[matches.kind == 'reference'].sort_values(
-                            ['hit', 'date'], ascending=[False, True])),
-                        ('candidate', matches[matches.kind == 'candidate'].sort_values('date'))]:
-        for match in rows.itertuples():
-            # a candidate that repeats a reference date is already in the gallery
-            if group == 'candidate' and match.date in reference_dates:
-                continue
-            episode = by_ftd_date.get(match.detected) if match.hit else None
-            if episode is not None:
-                shown.add(match.detected)
-            rv.append({'key': panel_key('ref' if group == 'reference' else 'cand', match.date),
-                       'group': group, 'date': match.date, 'match': match, 'episode': episode})
-
-    for row in ftds.itertuples():
-        if row.ftd_date not in shown:
-            rv.append({'key': panel_key('ftd', row.ftd_date), 'group': 'other',
-                       'date': row.ftd_date, 'match': None, 'episode': row})
+    rv = []
+    for match in matches[matches.in_data].itertuples():
+        episode = by_ftd_date.get(sa.as_date(match.detected)) if match.hit else None
+        rv.append({'key': panel_key('truth', match.date), 'group': 'truth',
+                   'date': match.date, 'match': match, 'episode': episode})
+    for day in sa.false_positive_dates(matches, pulses):
+        rv.append({'key': panel_key('fp', day), 'group': 'fp', 'date': sa.as_date(day),
+                   'match': None, 'episode': by_ftd_date.get(sa.as_date(day))})
     return rv
 
 
-def caption(entry, outcomes, horizon=20):
+def caption(entry, outcomes, horizon=CAPTION_HORIZON):
     """
         The one line verdict under a panel, e.g.
-        'ref Apr 2 2020 - detected Apr 2 2020 (0d) - +18.3% @20d - held'.
+        'Apr 2 2020 - fired Apr 2 2020 (+0d) - day 4 of the attempt - +18.3% @20d - held'.
     :param outcomes: the forward returns, as signal_analysis.forward_outcomes returns them
     :param horizon: the horizon whose return the caption quotes
     """
     match, episode = entry['match'], entry['episode']
     parts = []
     if match is not None:
-        parts.append(f"{'ref' if entry['group'] == 'reference' else 'cand'} "
-                     f"{fmt_date(match.date)}")
-        if not match.in_data:
-            parts.append("outside the data")
-        elif match.hit:
-            parts.append(f"detected {fmt_date(match.detected)} ({match.gap:+.0f}d)")
+        parts.append(f"ground truth {fmt_date(match.date)}")
+        if match.hit:
+            parts.append(f"fired {fmt_date(match.detected)} ({match.gap:+.0f}d)")
         else:
-            nearest = (f"nearest {fmt_date(match.detected)} ({match.gap:+.0f}d)"
-                       if match.detected is not None else "nothing fired")
-            parts.append(f"missed - {nearest}")
-            parts.append(f"{match.state} on the day")
-            blocks = ", ".join(filter(None, [f"day 0 blocked by {match.day0_blocks}"
-                                             if match.day0_blocks else "",
-                                             f"follow through blocked by {match.ftd_blocks}"
-                                             if match.ftd_blocks else ""]))
-            if blocks:
-                parts.append(blocks)
+            parts.append(f"not fired - {match.reason}")
     else:
-        parts.append(f"ftd {fmt_date(episode.ftd_date)}")
+        parts.append(f"false positive {fmt_date(entry['date'])}")
 
     if episode is not None:
-        parts.insert(1 if match is None else 2, f"day {episode.rally_day:.0f} of the attempt")
+        parts.append(f"day {episode.rally_day:.0f} of the attempt")
         column = f'r{horizon}'
         if episode.ftd_date in outcomes.index and column in outcomes.columns:
             parts.append(f"{fmt_pct(outcomes.loc[episode.ftd_date, column])} @{horizon}d")
@@ -280,9 +292,9 @@ def caption(entry, outcomes, horizon=20):
 
 def panel_window(entry, bar_of, bars):
     """
-        The bars a panel covers: the attempt, the reference date and, when the Follow Through
-        Day failed, the failure - with CONTEXT_BARS on each side. A new correction is not
-        drawn in: it can be years away.
+        The bars a panel covers: the attempt, the ground truth date and, when the Follow
+        Through Day failed, the failure - with CONTEXT_BARS on each side. A new correction is
+        not drawn in: it can be years away.
     """
     days = [entry['date']]
     episode = entry['episode']
@@ -324,7 +336,7 @@ def panel_figure(ohlcv, sv, entry, first, last):
     """
         One annotated episode: the bars and their volume, the peak and the decline to day 0,
         the rally low, the rally day numbers, the Follow Through Day and the days that were
-        blocked from being one, the reference date, and a band of the machine's state.
+        blocked from being one, the ground truth date, and a band of the machine's state.
     """
     window, svw = ohlcv.iloc[first:last + 1], sv.iloc[first:last + 1]
     days = list(window.index)
@@ -365,7 +377,7 @@ def panel_figure(ohlcv, sv, entry, first, last):
     _draw_rally_numbers(fig, svw, window, days)
     _draw_blocks(fig, svw, window, days)
 
-    if entry['date'] in window.index:
+    if entry['match'] is not None and entry['date'] in window.index:
         fig.add_vline(x=entry['date'], line=dict(color=_REFERENCE, width=1, dash='dash'),
                       row=1, col=1)
 
@@ -457,8 +469,8 @@ def _draw_blocks(fig, svw, window, days):
 def _draw_correction_context(fig, svw, window, day):
     """
         The peak the correction test was being measured against on the day, and the deepest
-        low of the window against it. This is the whole of the explanation for a reference
-        the signal missed: the decline was too shallow, or the peak too young, or both.
+        low of the window against it. This is the whole of the explanation for a ground truth
+        date the signal missed: the decline was too shallow, or the peak too young, or both.
     """
     if day not in svw.index or window.empty:
         return
@@ -559,6 +571,8 @@ table.tbl th, table.tbl td { border: 1px solid #e6e6e6; padding: 5px 8px; text-a
                              vertical-align: top; }
 table.tbl th { background: #f2f4f6; font-weight: 600; }
 table.tbl tr.miss td { background: #fff6f5; }
+table.kv { width: auto; }
+table.kv td:first-child { color: #666; white-space: nowrap; }
 .panel { background: #fff; border: 1px solid #e3e3e3; border-radius: 6px; padding: 10px 12px;
          margin: 16px 0; scroll-margin-top: 12px; }
 .panel h4 { margin: 0 0 2px; font-size: 14px; }
@@ -603,45 +617,94 @@ def fact(value, label):
     return f'<div class="fact"><b>{value}</b><span>{esc(label)}</span></div>'
 
 
-def header_html(signal, conf, underlying, period, sv, matches):
-    references = matches[matches.kind == 'reference']
-    params = ", ".join(f"{k}={v!r}" for k, v in sorted(conf['signal'].items()) if k != 'name')
-    return (f"<h1>{esc(signal.name)}</h1>\n"
-            f'<p class="sub">{esc(conf["signal"]["name"])}({esc(params)})<br>'
-            f"{esc(underlying)} &middot; {period}</p>\n"
+def _kv_table(pairs):
+    return html_table(["parameter", "value"], [[esc(k), esc(v)] for k, v in pairs],
+                      css_class="tbl kv")
+
+
+def parameters_html(signal, conf, underlying, ohlcv, md, ground_truth, early, late):
+    """ The signal run and the verification test, spelled out so a run can be repeated. """
+    signal_pairs = [("signal", conf['signal']['name'])]
+    signal_pairs += [(k, repr(v)) for k, v in sorted(conf['signal'].items()) if k != 'name']
+    signal_pairs += [("underlying", underlying), ("market data", md),
+                     ("period", f"{ohlcv.index[0]} .. {ohlcv.index[-1]}"),
+                     ("trading days", f"{len(ohlcv):,}")]
+    truth_pairs = [("ground truth", ground_truth),
+                   ("file", sa.ground_truth_path(ground_truth)),
+                   ("question", _GROUND_TRUTH_LABELS.get(ground_truth,
+                                                          "the dates in the file given")),
+                   ("tolerance", f"a firing matches a ground truth date from {early} trading "
+                                 f"day{'s' if early != 1 else ''} before it to {late} after it; "
+                                 f"each firing matches at most one date"),
+                   ("forward path", f"{FORWARD_HORIZONS[-1]} trading days after the firing, "
+                                    f"from the next day's open")]
+    return ("<h3>Signal run</h3>" + _kv_table(signal_pairs)
+            + "<h3>Verification test</h3>" + _kv_table(truth_pairs))
+
+
+def header_html(signal, underlying, ground_truth, stats):
+    truth = f"{stats['ground_truth']}"
+    if stats['ground_truth_total'] != stats['ground_truth']:
+        truth += f" of {stats['ground_truth_total']}"
+    return (f"<h1>{esc(REPORT_NAME)}</h1>\n"
+            f'<p class="sub">{esc(signal.name)} on {esc(underlying)}, scored against '
+            f'{esc(_GROUND_TRUTH_LABELS.get(ground_truth, ground_truth))}</p>\n'
             '<div class="facts">'
-            + fact(int(sv.es.sum()), "firings")
-            + fact(f"{int(references.hit.sum())} / {len(references)}", "reference dates hit")
-            + fact(int(matches[matches.kind == 'candidate'].hit.sum()), "candidate dates hit")
+            + fact(truth, "ground truth dates in the data")
+            + fact(stats['positives'], "positives (firings)")
+            + fact(f"{stats['trading_days']:,}", "trading days")
+            + fact(stats['true_positives'], "true positives")
+            + fact(stats['false_positives'], "false positives")
+            + fact(fmt_pct(stats['precision'], sign=False), "precision")
+            + fact(fmt_pct(stats['recall'], sign=False), "recall")
+            + fact(fmt_num(stats['f1']), "F1")
             + "</div>")
 
 
-def match_table_html(matches):
-    """ The reference and candidate table, each row linking to its gallery panel. """
-    reference_dates = set(matches.date[matches.kind == 'reference'])
-    rows = []
+def scorecard_html(matches, false_positives, episodes):
+    """
+        The ground truth dates and the false positives in one table, in date order: a ground
+        truth date sorts by itself, a false positive by its firing date. A ground truth row
+        carries the firing that matched it, or the reason nothing did, and the note recorded
+        for the date; a false positive row only its firing. Every firing also shows the rally
+        day it came on, its gain and what became of the uptrend it started. The dates link to
+        their gallery panels.
+    """
+    ftds = {sa.as_date(row.ftd_date): row for row in
+            episodes[episodes.outcome == 'FTD'].itertuples()}
+
+    keyed = []
     for match in matches.itertuples():
-        kind = 'ref' if match.kind == 'reference' else 'cand'
-        # a candidate repeating a reference date is drawn once, under the reference
-        key = panel_key('ref' if match.date in reference_dates else kind, match.date)
-        if not match.in_data:
-            verdict, detected = "outside the data", "-"
-        elif match.hit:
-            verdict = "hit"
-            detected = f"{fmt_date(match.detected)} ({match.gap:+.0f}d)"
+        link = (f'<a href="#{panel_key("truth", match.date)}">{fmt_date(match.date)}</a>'
+                if match.in_data else fmt_date(match.date))
+        if match.hit:
+            fired, result = f"{fmt_date(match.detected)} ({match.gap:+.0f}d)", "true positive"
         else:
-            verdict = "miss"
-            detected = (f"{fmt_date(match.detected)} ({match.gap:+.0f}d)"
-                        if match.detected is not None else "nothing fired")
-        # what the machine was doing and what it blocked is the diagnosis of a miss; on a
-        # hit it is noise, so the columns stay empty there
-        blocks = "" if match.hit else " / ".join(filter(None, [match.day0_blocks,
-                                                              match.ftd_blocks]))
-        rows.append([f'<a href="#{key}">{fmt_date(match.date)}</a>', esc(match.episode),
-                     match.kind, esc(match.confidence), detected, verdict,
-                     "" if match.hit else esc(match.state), esc(blocks), esc(match.notes)])
-    return html_table(["date", "episode", "kind", "confidence", "nearest firing", "",
-                       "state on the day", "blocks nearby", "notes"], rows)
+            fired, result = "", "miss" if match.in_data else "outside the data"
+        note = " - ".join(filter(None, [esc(match.episode), esc(match.notes)]))
+        firing = _firing_cells(ftds.get(sa.as_date(match.detected)) if match.hit else None)
+        reason = "" if match.hit or not match.in_data else esc(match.reason)
+        keyed.append(((sa.as_date(match.date), 0),
+                      [link, fired, result, *firing, reason, note]))
+    for day in false_positives:
+        link = f'<a href="#{panel_key("fp", day)}">{fmt_date(day)}</a>'
+        keyed.append(((sa.as_date(day), 1),
+                      ["", link, "false positive", *_firing_cells(ftds.get(sa.as_date(day))),
+                       "", ""]))
+
+    rows = [row for _, row in sorted(keyed, key=lambda item: item[0])]
+    return html_table(["ground truth date", "firing date", "result", "rally day", "gain",
+                       "what became of it", "reason for not firing", "note"], rows)
+
+
+def _firing_cells(episode):
+    """ The rally day, the gain and what became of the uptrend, for a firing's episode. """
+    if episode is None:
+        return ["", "", ""]
+    held = {'FTD_FAILED': f"failed after {episode.days_to_failure:.0f}d"
+            if not pd.isna(episode.days_to_failure) else "failed",
+            'NEW_CORRECTION': "held to the next correction"}.get(episode.uptrend_end, "held")
+    return [f"{episode.rally_day:.0f}", fmt_pct(episode.ftd_gain), held]
 
 
 def outcomes_table_html(summary):
@@ -667,11 +730,11 @@ def forward_table_html(table, horizons):
 
 def sensitivity_table_html(table, horizon):
     rows = [[esc(row['setting']), f"{int(row['pulses'])}",
-             f"{int(row['references_hit'])} / {int(row['references'])}",
-             fmt_pct(row['failure_rate'], sign=False),
-             fmt_pct(row[f'median r{horizon}'])]
+             f"{int(row['hits'])} / {int(row['ground_truth'])}",
+             fmt_pct(row['precision'], sign=False), fmt_pct(row['recall'], sign=False),
+             fmt_pct(row['failure_rate'], sign=False), fmt_pct(row[f'median r{horizon}'])]
             for _, row in table.iterrows()]
-    return html_table(["setting", "firings", "references hit", "failure rate",
+    return html_table(["setting", "firings", "hits", "precision", "recall", "failure rate",
                        f"median @{horizon}d"], rows)
 
 
@@ -692,40 +755,33 @@ def state_legend_html():
     return f'<p class="legend">state band:{swatches}</p>'
 
 
-def gallery_html(ohlcv, sv, entries, outcomes, bar_of, bars, horizon=20):
-    """ The panels, grouped and with the remaining firings folded away. """
-    titles = {'reference': ('Reference dates',
-                            'The IBD style calls of docs/ftd_reference.yaml, matched first.'),
-              'candidate': ('Candidate dates',
-                            'Recalled but unconfirmed calls - not expectations.'),
-              'other': ('Remaining firings',
-                        'Follow Through Days no reference or candidate accounts for.')}
-    parts, current = [], None
-    for entry in entries:
-        if entry['group'] != current:
-            if current == 'other':
-                parts.append("</details>")
-            current = entry['group']
-            title, blurb = titles[current]
-            if current == 'other':
-                parts.append(f'<details><summary>{title} '
-                             f'({sum(e["group"] == "other" for e in entries)}) - {blurb}'
-                             f'</summary>')
-            else:
-                parts.append(f"<h3>{title}</h3><p class='note'>{blurb}</p>")
+def gallery_html(ohlcv, sv, entries, outcomes, bar_of, bars, horizon=CAPTION_HORIZON):
+    """ The panels: the ground truth dates, then the false positives folded away. """
+    parts = []
+    truth = [entry for entry in entries if entry['group'] == 'truth']
+    fps = [entry for entry in entries if entry['group'] == 'fp']
 
-        label = (f"{entry['match'].episode} - {fmt_date(entry['date'])}"
-                 if entry['match'] is not None else fmt_date(entry['date']))
-        chart = ""
-        if entry['match'] is None or entry['match'].in_data:
-            first, last = panel_window(entry, bar_of, bars)
-            fig = panel_figure(ohlcv, sv, entry, first, last)
-            chart = plot_div(entry['key'] + "-fig", fig)
-        parts.append(f'<div class="panel" id="{entry["key"]}"><h4>{esc(label)}</h4>'
-                     f'{chart}<p class="cap">{caption(entry, outcomes, horizon)}</p></div>')
-    if current == 'other':
+    parts.append("<h3>Ground truth dates</h3><p class='note'>One chart per ground truth "
+                 "date in the scorecard, in date order.</p>")
+    parts += [_panel_html(ohlcv, sv, entry, outcomes, bar_of, bars, horizon)
+              for entry in truth]
+    if fps:
+        parts.append(f"<details><summary>False positives ({len(fps)}) - firings no ground "
+                     f"truth date accounts for</summary>")
+        parts += [_panel_html(ohlcv, sv, entry, outcomes, bar_of, bars, horizon)
+                  for entry in fps]
         parts.append("</details>")
     return "\n".join(parts)
+
+
+def _panel_html(ohlcv, sv, entry, outcomes, bar_of, bars, horizon):
+    label = fmt_date(entry['date'])
+    if entry['match'] is not None and entry['match'].episode:
+        label = f"{entry['match'].episode} - {label}"
+    first, last = panel_window(entry, bar_of, bars)
+    chart = plot_div(entry['key'] + "-fig", panel_figure(ohlcv, sv, entry, first, last))
+    return (f'<div class="panel" id="{entry["key"]}"><h4>{esc(label)}</h4>'
+            f'{chart}<p class="cap">{caption(entry, outcomes, horizon)}</p></div>')
 
 
 def build_page(title, body):
@@ -741,12 +797,20 @@ def build_page(title, body):
 # ----------------------------------------------------------------------------------
 
 def run_report(signal_conf, underlying, start_date, end_date=None, md="./md", out="",
-               references=None, grid=None, tolerance=TOLERANCE_TRADING_DAYS,
-               horizons=FORWARD_HORIZONS):
+               ground_truth="turnarounds", early=sa.EARLY_DAYS, late=sa.LATE_DAYS,
+               horizons=FORWARD_HORIZONS, grid=None):
     """
-        Runs one signal over one underlying and writes the report into 'out'.
-    :return: dict with 'report', 'episodes', 'references' and 'signal_values' - the paths
-             written - plus the frames themselves for a caller that wants them
+        Runs one signal over one underlying, scores it against the ground truth and writes
+        the report into 'out'.
+    :param ground_truth: 'turnarounds', 'ibd' or a file path - see
+                         signal_analysis.load_ground_truth
+    :param early, late: the matching tolerance in trading days, before and after the date
+    :param horizons: the forward horizons, in trading days; the average path runs to the
+                     longest and the captions quote the middle one
+    :param grid: the parameter grid of the sensitivity table, SENSITIVITY_GRID by default
+    :return: dict with 'paths' (the files written, by name), 'signal', 'ohlcv',
+             'signal_values', 'episodes', 'scorecard' (the match table), 'stats',
+             'false_positives', 'paths_after' (the forward paths), 'sensitivity' and 'html'
     """
     env = Environment(md=md, out_dir=out)
     signal = build_component(signal_conf['signal'], SIGNALS, 'signal')
@@ -761,68 +825,82 @@ def run_report(signal_conf, underlying, start_date, end_date=None, md="./md", ou
         raise ValueError(f"{signal.name} does not record the day by day diagnostics this "
                          f"report reads. It is written for FTDSignal - see docs/SIGNALS.md.")
 
-    refs = sa.load_references(references)
+    truth = sa.load_ground_truth(ground_truth)
     episodes = sa.extract_episodes(ohlcv, sv)
-    matches = sa.match_references(sv, refs, tolerance)
     pulses = sa.pulse_dates(sv)
+    matches = sa.match_ground_truth(sv, truth, early, late)
+    stats = sa.verification_stats(matches, pulses, len(ohlcv))
+    false_positives = sa.false_positive_dates(matches, pulses)
+    horizons = tuple(sorted(horizons))
+    forward_days, quoted = horizons[-1], horizons[len(horizons) // 2]
     outcomes = sa.forward_outcomes(ohlcv, pulses, horizons)
+    paths = sa.forward_paths(ohlcv, pulses, forward_days)
     table = sa.forward_table(ohlcv, {f"{signal.name} firings": pulses,
                                      **sa.baseline_dates(ohlcv, signal)}, horizons)
-    paths = sa.forward_paths(ohlcv, pulses, max(horizons))
     base = {k: v for k, v in signal_conf['signal'].items() if k != 'name'}
-    grid = SENSITIVITY_GRID if grid is None else grid
-    settings = sa.sensitivity(ohlcv, grid, refs, base_params=base,
-                              factory=SIGNALS[signal_conf['signal']['name']], env=env,
-                              tolerance=tolerance, horizon=horizons[1])
+    settings = sa.sensitivity(ohlcv, SENSITIVITY_GRID if grid is None else grid, truth,
+                              base_params=base, factory=SIGNALS[signal_conf['signal']['name']],
+                              env=env, early=early, late=late, horizon=quoted)
 
-    period = (f"{ohlcv.index[0]} .. {ohlcv.index[-1]} ({len(ohlcv):,} trading days)")
     bars = ohlcv.index
     bar_of = {day: i for i, day in enumerate(bars)}
-    entries = gallery_entries(matches, episodes, tolerance)
+    entries = gallery_entries(matches, episodes, pulses)
 
     body = "\n".join([
-        header_html(signal, signal_conf, underlying, period, sv, matches),
+        header_html(signal, underlying, ground_truth, stats),
+        "<h2>Parameters</h2>",
+        parameters_html(signal, signal_conf, underlying, ohlcv, md, ground_truth, early, late),
         "<h2>Scorecard</h2>",
-        "<h3>Reference and candidate dates</h3>",
-        match_table_html(matches),
-        "<h3>How the rally attempts ended</h3>",
-        outcomes_table_html(sa.attempt_summary(episodes)),
-        "<h3>What followed a firing</h3>",
-        f"<p class='note'>Measured from the next day's open, the way SignalDrivenStrategy "
-        f"executes a signal. 'naive FTD days' applies the gain and volume tests to every "
-        f"day with none of the correction, day 0 or day count logic around them.</p>",
-        forward_table_html(table, horizons),
+        "<p class='note'>The ground truth dates and the false positives - firings no ground "
+        "truth date accounts for - in date order. A ground truth date is hit when a firing "
+        "falls within the tolerance; a date outside the data is listed but not scored. The "
+        "reason for a miss is read off the signal's own diagnostics on the date.</p>",
+        scorecard_html(matches, false_positives, episodes),
+        "<h2>What followed a firing</h2>",
         "<h3>The average path after a firing</h3>",
+        f"<p class='note'>The mean return over all {stats['positives']} firings for up to "
+        f"{forward_days} trading days after, with the interquartile band. Measured from "
+        f"the next day's open, the way SignalDrivenStrategy executes a signal.</p>",
         plot_div("fwd-path", forward_path_figure(paths)),
+        "<h3>Against the baselines</h3>",
+        "<p class='note'>'naive FTD days' applies the gain and volume tests to every day "
+        "with none of the correction, day 0 or day count logic around them.</p>",
+        forward_table_html(table, horizons),
+        "<h2>The rally attempts</h2>",
+        "<h3>How they ended</h3>",
+        outcomes_table_html(sa.attempt_summary(episodes)),
         "<h3>Where in the attempt the follow through day lands</h3>",
         plot_div("rally-day", rally_day_figure(episodes)),
-        "<h3>Sensitivity to the parameters</h3>",
-        f"<p class='note'>One parameter away from this run's setting at a time.</p>",
-        sensitivity_table_html(settings, horizons[1]),
-        "<h2>Gallery</h2>",
-        state_legend_html(),
-        gallery_html(ohlcv, sv, entries, outcomes, bar_of, bars, horizons[1]),
         "<h3>Attempts that were never confirmed</h3>",
-        f"<p class='note'>Rally attempts that were undercut or timed out, so no chart.</p>",
+        "<p class='note'>Rally attempts that were undercut or timed out, so no chart.</p>",
         f"<details><summary>{len(episodes[episodes.outcome != 'FTD'])} attempts</summary>"
         f"{unconfirmed_table_html(episodes)}</details>",
+        "<h2>Sensitivity to the parameters</h2>",
+        "<p class='note'>One parameter away from this run's setting at a time, scored "
+        "against the same ground truth with the same tolerance.</p>",
+        sensitivity_table_html(settings, quoted),
+        "<h2>Gallery</h2>",
+        state_legend_html(),
+        gallery_html(ohlcv, sv, entries, outcomes, bar_of, bars, quoted),
     ])
 
     paths_written = {}
     if out:
         os.makedirs(out, exist_ok=True)
-        paths_written['report'] = os.path.join(out, "report.html")
+        paths_written['report'] = os.path.join(out, f"{REPORT_NAME}.html")
         with open(paths_written['report'], "w", encoding="utf-8") as f:
-            f.write(build_page(f"{signal.name} on {underlying}", body))
+            f.write(build_page(f"{REPORT_NAME}: {signal.name} on {underlying}", body))
+        paths_written['scorecard'] = os.path.join(out, "scorecard.csv")
+        matches.to_csv(paths_written['scorecard'], index=False)
         paths_written['episodes'] = os.path.join(out, "episodes.csv")
         episodes.to_csv(paths_written['episodes'], index=False)
-        paths_written['references'] = os.path.join(out, "references.csv")
-        matches.to_csv(paths_written['references'], index=False)
         paths_written['signal_values'] = os.path.join(out, f"{signal.name}.csv")
         sv.to_csv(paths_written['signal_values'])
 
     return {'paths': paths_written, 'signal': signal, 'ohlcv': ohlcv, 'signal_values': sv,
-            'episodes': episodes, 'references': matches, 'sensitivity': settings, 'html': body}
+            'episodes': episodes, 'scorecard': matches, 'stats': stats,
+            'false_positives': false_positives, 'paths_after': paths,
+            'sensitivity': settings, 'html': body}
 
 
 def main(argv=None):
@@ -831,19 +909,25 @@ def main(argv=None):
         conf = load_signal_conf(args.signal, args.overrides)
         rv = run_report(signal_conf=conf, underlying=args.underlying,
                         start_date=args.start_date, end_date=args.end_date, md=args.md,
-                        out=args.out, references=args.references)
+                        out=args.out, ground_truth=args.ground_truth,
+                        early=args.early_days, late=args.late_days)
     except (OSError, ValueError, KeyError, yaml.YAMLError) as e:
         print(f"report failed: {e}", file=sys.stderr)
         return 2
 
-    matches = rv['references']
-    references = matches[matches.kind == 'reference']
-    print(f"Signal     : {rv['signal'].name}")
-    print(f"Underlying : {args.underlying}")
-    print(f"Period     : {rv['ohlcv'].index[0]} .. {rv['ohlcv'].index[-1]}")
-    print(f"Firings    : {int(rv['signal_values'].es.sum())}")
-    print(f"References : {int(references.hit.sum())} of {len(references)} hit")
-    print(f"Attempts   : {len(rv['episodes'])}")
+    stats = rv['stats']
+    print(f"Signal       : {rv['signal'].name}")
+    print(f"Underlying   : {args.underlying}")
+    print(f"Period       : {rv['ohlcv'].index[0]} .. {rv['ohlcv'].index[-1]} "
+          f"({stats['trading_days']:,} trading days)")
+    print(f"Ground truth : {args.ground_truth}, {stats['ground_truth']} dates in the data")
+    print(f"Tolerance    : -{args.early_days} / +{args.late_days} trading days")
+    print(f"Positives    : {stats['positives']} "
+          f"({stats['true_positives']} true, {stats['false_positives']} false)")
+    print(f"Precision    : {fmt_pct(stats['precision'], sign=False)}")
+    print(f"Recall       : {fmt_pct(stats['recall'], sign=False)}")
+    print(f"F1           : {fmt_num(stats['f1'])}")
+    print(f"Attempts     : {len(rv['episodes'])}")
     for name, path in rv['paths'].items():
         print(f"  {name:<14} {path}")
     return 0

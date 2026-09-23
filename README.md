@@ -1,15 +1,21 @@
 # Backfire - quantitative stock investing strategy research engine. 
 
 ## Project Goals and Overview
-Backfire is a quantitative stock investing strategy research engine aimed at quantitative and qualitative strategy behaviour understanding, optimization and development. It supports:  
-- trading strategies operating on OHLC data
+Backfire is a quantitative stock investing strategy research engine aimed at quantitative and qualitative strategy behaviour understanding, optimization and development. 
+
+Purpose: 
+- verify claims made by popularizers of strategies for individual retail investors (e.g., Vibha Jha, Mark Minervini, Jim Roppel, IBD) by backtesting the strategies on historical data and analyzing their performance and risk/reward profiles 
+- explore parameter value variations (e.g., different moving average periods) and behaviour variations (e.g., different exit criteria) and their impact on strategy reward and risk
+- find optimal parameter set for a strategy given an investor risk/reward profile
+- auto-research modifications to strategies to improve their suitability given a target (risk/reward profile), constraints (holding period, etc) and a budget (number of iterations)
+
+Strategy behaviour is analyzed by executing deterministic simulations of strategies against historical and synthetic data and analyzing the generated quantitative metrics. Analysis of strategy results is performed by LLM-based agents following instructions as well as by visual inspection of the results. Auto research of strategy modifications will be performed by LLM-based agents to leverage the planning/reasoning and deep research capabilities of frontier LLM models. 
+
+It supports:  
+- index and individual stock strategies operating on daily OHLC data
 - strategy performance simulation/backtest, behaviour visualization and qualitative performance metrics analysis
 - individual signal definition, visualization of signals behaviour and metrics
 - manual and automated strategy analysis, optimization and improvement  
-
-Strategy simulation uses deterministic rules to make sure simulations and market data analysis is precise and reprodicuble. Aanalysis, optimization and development use AI agents with human input so that these processes can be automated but still leverage the planning/reasoning and deep research available with frontier models. 
-
-Signal and strategy behaviour can be visualized in interactive dashboards or notebooks. 
 
 ## Application Domain 
 
@@ -409,55 +415,79 @@ Yaml file for the signal (see `docs/SIGNALS.md` for what the FTD parameters mean
 Run 
 `uv run python backfire/visualize_signal.py --signal my_signal.yaml --signal.name=FTDSignal --signal.ftd_min_gain=0.015 --signal.day0_window=10`
 
-### Signal analysis report
+### FTD signal verification report
 
-`backfire/report_signal.py` writes a static HTML report about one signal over one underlying.
-Where `visualize_signal.py` runs a live server, this writes a file: it answers two questions and
-then gets out of the way. Does every firing follow the rules? Does a firing mark a real
-turnaround?
+`backfire/ftd_signal_verification_report.py` writes the verification report that `docs/SIGNALS.md`, "Signal
+verification", specifies: one signal over one underlying, scored against a set of ground truth
+dates, as a static HTML file.
 
 ```
-uv run python backfire/report_signal.py --underlying QQQ --start_date 1999-03-10 \
-    --signal strategies/signals/ftd.yaml --signal.min_peak_age_days=15 --out out/ftd_report
+uv run python backfire/ftd_signal_verification_report.py --underlying QQQ --start_date 1999-03-10 \
+    --signal strategies/signals/ftd.yaml --ground_truth turnarounds --out out/ftd_verification
 ```
 
 It takes the same `--signal` file plus `--signal.*` override convention as `visualize_signal.py`,
 and the same signal catalog as `backtest.py`. With no `--signal` file the overrides define the
-signal on their own. `--references` points at a reference date file other than the default
-`docs/ftd_reference.yaml`.
+signal on their own.
+
+`--ground_truth` picks what the signal is verified against:
+
+- `turnarounds` (the default) - `docs/turnaround_points.csv`, the market turnarounds picked
+  visually with hindsight: does the signal meet its intent?
+- `ibd` - the `reference` entries of `docs/ftd_reference.yaml`, IBD's own follow-through day
+  calls: does the signal fire when IBD did? The file's `candidate` entries are recalled but
+  unconfirmed dates and are not scored.
+- a path to a `.csv` or `.yaml` file in either format.
+
+A firing is a *positive*. It is a *true positive* when it falls within the tolerance of a ground
+truth date - at most `--early_days` trading days before it (default 1) or `--late_days` after it
+(default 3) - and each firing can match only one date; every other firing is a *false positive*.
+Precision is true positives over positives, recall is true positives over the ground truth dates
+the data covers, and F1 their harmonic mean.
 
 The run writes four files into `--out`:
 
-- `report.html` - self-contained, with plotly.js inlined, so it opens offline
+- `ftd_signal_verification_report.html` - self-contained, with plotly.js inlined, so it opens
+  offline
+- `scorecard.csv` - one row per ground truth date: the firing that matched it and its gap, or the
+  reason nothing did, plus the state and the block marks the signal recorded around the date
 - `episodes.csv` - one row per rally attempt: its Day 0, Day 1, peak, decline, outcome, and for
   a confirmed one the follow-through day, its gain and volume ratio, and whether it later failed
-- `references.csv` - the reference and candidate dates against the firings
 - the signal's daily values, the same file a backtest saves
 
-The page has three parts:
+The page has these parts:
 
-- a **header** with the signal and its parameters, the period, the number of firings and how many
-  reference dates were hit
-- a **scorecard**: the reference and candidate match table (each row links to its chart), how the
-  rally attempts ended, what the market did after a firing against two baselines - every day, and
-  "naive follow-through days" that apply the gain and volume tests with none of the correction,
-  Day 0 or day-count logic around them - the average forward path with an interquartile band, the
-  rally day the follow-through day lands on, and the sensitivity to the parameters
-- a **gallery**: one annotated chart per episode, the references first (matched, then missed),
-  then the candidates, then the firings no reference accounts for. Each shows the candles and
-  volume, the peak and the decline to Day 0, the rally low, the rally-day numbers, the
-  follow-through day, × marks on the days that were blocked from being a Day 0 or a
-  follow-through day with the reason on hover, and a band of the state machine's state. Hovering
-  a bar shows its whole diagnostic row. Attempts that were undercut or timed out are in a
-  collapsed table rather than a chart.
+- a **header** with the statistics: ground truth dates in the data, positives, trading days,
+  true and false positives, precision, recall and F1
+- the **parameters** of the signal run (class, constructor arguments, underlying, period) and of
+  the verification test (ground truth file, tolerance, forward horizon), so a run can be repeated
+- a **scorecard**: the ground truth dates and the false positives in one table, in date order. A
+  ground truth date shows the firing date, the reason for not firing and the note recorded for
+  the date; a false positive its firing date. Every firing also shows its rally day, gain and what
+  became of the uptrend, and each row links to its chart
+- **what followed a firing**: the average path of the underlying for up to 60 trading days,
+  with an interquartile band, and the forward returns at 5, 20 and 60 days against two
+  baselines - every day, and "naive follow-through days" that apply the gain and volume tests
+  with none of the correction, Day 0 or day-count logic around them. Measured from the **next
+  day's open** the way `SignalDrivenStrategy` executes a signal
+- **the rally attempts**: how they ended, the rally day the follow-through day lands on, and a
+  collapsed table of the attempts that were undercut or timed out
+- the **sensitivity** of the statistics to the parameters, one parameter away from the run's
+  setting at a time and scored against the same ground truth
+- a **gallery**: one annotated chart per ground truth date, in scorecard order, then the false
+  positives folded away. Each shows the candles and volume, the peak and the decline to Day 0, the
+  rally low, the rally-day numbers, the follow-through day, × marks on the days that were blocked
+  from being a Day 0 or a follow-through day with the reason on hover, a dashed line on the ground
+  truth date, and a band of the state machine's state. Hovering a bar shows its whole diagnostic
+  row.
 
-Forward returns are measured from the **next day's open**, the way `SignalDrivenStrategy`
-executes a signal, not from the follow-through day's close.
+The reason for a miss is read off the signal's own diagnostics: a firing close by but outside the
+tolerance, the uptrend the signal was still in, the clause that blocked the Day 0 (`DECLINE`,
+`PEAK_AGE`) or the clause that blocked the follow-through (`TOO_EARLY`, `VOLUME`).
 
 The report reads the day-by-day diagnostics `FTDSignal` records (see `docs/SIGNALS.md`), so it
 only runs for that signal; another signal is refused with a message saying so. About a hundred
 charts is a heavy page, so a chart is drawn only when it scrolls into view.
-
 
 
 ### Running visualization notebooks: 

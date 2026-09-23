@@ -23,7 +23,6 @@ FIRST, LAST = date(1999, 3, 10), date(2026, 9, 15)
 TOLERANCE_TRADING_DAYS = 10
 
 REFERENCES = [ref for ref in load_references() if ref['kind'] == 'reference']
-CANDIDATES = [ref for ref in load_references() if ref['kind'] == 'candidate']
 UNREACHABLE = [ref for ref in REFERENCES if ref.get('unreachable')]
 
 
@@ -52,13 +51,6 @@ def nearest_pulse(rv, bar_of, day):
     target = min(rv.index.searchsorted(day, side='left'), len(rv.index) - 1)
     gap = min((bar - target for bar in detected), key=abs)
     return rv.index[target + gap], gap
-
-
-def test_the_reference_list_is_the_one_signals_md_documents():
-    # docs/SIGNALS.md tabulates 12 reference dates and 29 candidates; the YAML is the copy
-    # the code reads, so the two have to stay the same size
-    assert (len(REFERENCES), len(CANDIDATES)) == (12, 29)
-    assert all(ref['date'] is not None for ref in REFERENCES + CANDIDATES)
 
 
 @pytest.mark.parametrize("ref", [reference_case(ref) for ref in REFERENCES])

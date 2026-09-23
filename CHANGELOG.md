@@ -1,3 +1,36 @@
+# September 23, 2026 - FTD signal verification report
+
+`backfire/ftd_signal_verification_report.py`, renamed from `backfire/report_signal.py`, now
+writes the verification report that `docs/SIGNALS.md`, 'Signal verification', specifies, in place
+of the analysis report of September 21.
+
+```
+uv run python backfire/ftd_signal_verification_report.py --underlying QQQ --start_date 1999-03-10 \
+    --signal strategies/signals/ftd.yaml --ground_truth turnarounds --out out/ftd_verification
+```
+
+- **Ground truth.** `--ground_truth turnarounds` scores the signal against the turnaround points
+  of `docs/turnaround_points.csv` (does the signal meet its intent?), `--ground_truth ibd`
+  against the reference calls of `docs/ftd_reference.yaml` (does it fire when IBD did?); a file
+  path in either format also works. The candidates of the YAML are not scored. `--references` is
+  gone.
+- **Matching.** A firing matches a ground truth date when it falls from `--early_days` (1)
+  trading days before it to `--late_days` (3) after it, replacing the symmetric 10 day
+  tolerance, and each firing matches at most one date. A firing is a positive, a matched one a
+  true positive, the rest false positives; the report gives precision, recall and F1.
+- **Contents.** The statistics, the parameters of the run and of the test, a scorecard with one
+  row per ground truth date - the firing date, the reason for not firing, the note - and one per
+  false positive, all in date order in a single table, then a gallery of one chart per ground truth date and per false positive
+  linked from the scorecard. The forward returns against the baselines, the rally attempt
+  summary, the rally day histogram, the unconfirmed attempts and the parameter sensitivity table
+  stay, the last now scored against the chosen ground truth with the same tolerance.
+- **Files.** `ftd_signal_verification_report.html`, `scorecard.csv` (was `references.csv`),
+  `episodes.csv` and the signal values.
+- **`backfire/signal_analysis.py`** gains `load_turnaround_points`, `load_ground_truth`,
+  `match_ground_truth` (replacing `match_references`), `false_positive_dates` and
+  `verification_stats`; `sensitivity` scores against a ground truth list with the same
+  tolerance and reports `hits`, `ground_truth`, `precision` and `recall`.
+
 # September 21, 2026 - signal analysis report
 
 Added `backfire/report_signal.py`, a CLI that writes a static HTML report about one signal over

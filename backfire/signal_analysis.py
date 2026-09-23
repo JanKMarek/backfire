@@ -2,16 +2,20 @@
     Analysis of what a signal did and of what the market did next.
 
     Pure pandas: nothing here draws or writes anything, so the same functions serve
-    backfire/report_signal.py and a notebook. Two questions are answered separately:
+    backfire/ftd_signal_verification_report.py and a notebook. Two questions are answered separately:
 
-      - does the signal follow its own rules? extract_episodes and match_references read the
-        diagnostics the signal records day by day (see FTDSignal) and line them up against the
-        reference dates in docs/ftd_reference.yaml.
+      - does the signal fire where it should? load_ground_truth reads a set of dates the
+        signal is expected to fire on - the turnaround points of docs/turnaround_points.csv
+        or the IBD calls of docs/ftd_reference.yaml - match_ground_truth lines the firings up
+        against them with the tolerance docs/SIGNALS.md gives, and verification_stats turns
+        the result into precision, recall and F1. extract_episodes reads the diagnostics the
+        signal records day by day (see FTDSignal) so that every miss can be explained.
       - does a firing mark a real turnaround? forward_outcomes, forward_paths and
         baseline_dates measure what happened after each firing and against what.
 
-    Only extract_episodes is specific to the Follow Through Day signal - it reads the 'event'
-    column of FTDSignal. Everything else works off the rising edges of any signal's 'es'.
+    Only extract_episodes and the miss reasons are specific to the Follow Through Day signal -
+    they read the 'event' and block columns of FTDSignal. Everything else works off the
+    rising edges of any signal's 'es'.
 """
 
 import math
@@ -24,9 +28,18 @@ import yaml
 
 from .signals import FTDSignal
 
-# docs/ftd_reference.yaml, next to this package
-REFERENCE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                              "docs", "ftd_reference.yaml")
+# the ground truth files, in docs/ next to this package
+_DOCS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs")
+REFERENCE_PATH = os.path.join(_DOCS, "ftd_reference.yaml")
+TURNAROUND_PATH = os.path.join(_DOCS, "turnaround_points.csv")
+# the ground truth a report can be scored against, by name - see load_ground_truth
+GROUND_TRUTH = {'turnarounds': TURNAROUND_PATH, 'ibd': REFERENCE_PATH}
+
+# the matching tolerance docs/SIGNALS.md gives: a firing counts for a ground truth date when
+# it is at most EARLY_DAYS trading days before it or LATE_DAYS after it
+EARLY_DAYS, LATE_DAYS = 1, 3
+# a firing this close to a ground truth date it did not match is reported as the reason
+NEAR_MISS_DAYS = 10
 
 # how a rally attempt ended, in the order the report lists them
 OUTCOMES = ('FTD', 'UNDERCUT', 'TIMEOUT', 'OPEN')
@@ -96,6 +109,61 @@ def load_references(path=None):
             entry['unreachable'] = unreachable
         rv.append(entry)
     return rv
+
+
+def load_turnaround_points(path=None):
+    """
+        Reads the turnaround points: the dates on which, with hindsight, the market turned -
+        not IBD calls, but what the signal is meant to detect (docs/SIGNALS.md, 'Signal
+        verification').
+    :param path: the CSV file, docs/turnaround_points.csv by default; '#' lines are comments
+                 and the columns are 'Date' and 'Notes'
+    :return: list of dicts in the shape load_references returns, with kind 'turnaround'
+    """
+    path = path or TURNAROUND_PATH
+    frame = pd.read_csv(path, comment='#', skip_blank_lines=True)
+    if 'Date' not in frame.columns:
+        raise ValueError(f"'{path}' must have a 'Date' column.")
+    rv = []
+    for row in frame.itertuples(index=False):
+        if pd.isna(row.Date):
+            continue
+        notes = getattr(row, 'Notes', None)
+        rv.append({'date': as_date(row.Date), 'episode': None, 'day1': None,
+                   'kind': 'turnaround', 'confidence': None,
+                   'notes': None if notes is None or pd.isna(notes) else str(notes)})
+    return rv
+
+
+def ground_truth_path(source='turnarounds'):
+    """ The file behind a ground truth name ('turnarounds', 'ibd'), or the path given. """
+    return GROUND_TRUTH.get(source, source)
+
+
+def load_ground_truth(source='turnarounds'):
+    """
+        Reads the dates a report scores the signal against.
+
+        'turnarounds' is docs/turnaround_points.csv: does the signal meet its intent? 'ibd' is
+        docs/ftd_reference.yaml: does the signal fire when IBD called a Follow Through Day?
+        Only the 'reference' entries of that file are ground truth - its candidates are
+        recalled but unconfirmed dates, not expectations. A path is read as one or the other
+        by its extension.
+
+    :param source: 'turnarounds', 'ibd', or the path of a .csv or .yaml file
+    :return: list of dicts with 'date' (a datetime.date), 'episode', 'day1', 'kind',
+             'confidence' and 'notes', in date order
+    """
+    path = ground_truth_path(source)
+    lower = str(path).lower()
+    if lower.endswith('.csv'):
+        rv = load_turnaround_points(path)
+    elif lower.endswith(('.yaml', '.yml')):
+        rv = [ref for ref in load_references(path) if ref['kind'] == 'reference']
+    else:
+        raise ValueError(f"Ground truth must be 'turnarounds', 'ibd' or a .csv/.yaml file, "
+                         f"got {source!r}.")
+    return sorted(rv, key=lambda entry: entry['date'])
 
 
 # ----------------------------------------------------------------------------------
@@ -322,52 +390,121 @@ def forward_table(ohlcv, groups, horizons=(5, 20, 60)):
 # The reference dates
 # ----------------------------------------------------------------------------------
 
-MATCH_COLUMNS = ['date', 'episode', 'kind', 'confidence', 'day1', 'detected', 'gap', 'hit',
-                 'in_data', 'state', 'day0_blocks', 'ftd_blocks', 'notes']
+MATCH_COLUMNS = ['date', 'episode', 'kind', 'confidence', 'day1', 'in_data', 'hit',
+                 'detected', 'gap', 'nearest', 'nearest_gap', 'state', 'day0_blocks',
+                 'ftd_blocks', 'reason', 'notes']
 
 
-def match_references(sv, refs, tolerance=10):
+def match_ground_truth(sv, truth, early=EARLY_DAYS, late=LATE_DAYS):
     """
-        Lines the signal's firings up against the reference and candidate dates.
+        Lines the signal's firings up against the ground truth dates.
 
-        A date is hit when a firing is within 'tolerance' trading days of it - the reference
-        calls are discretionary and made on the Nasdaq Composite, so an exact match is not
-        expected (see docs/SIGNALS.md). A date the data does not cover is neither a hit nor a
-        miss and is marked in_data False.
+        A date is hit when a firing falls at most 'early' trading days before it or 'late'
+        after it - the signal may confirm a turnaround a few days off the date recorded for
+        it (docs/SIGNALS.md, 'Signal verification'). Each firing counts for at most one date:
+        the dates are taken in order and each claims the nearest unclaimed firing in its
+        window, so the hits are the true positives and every other firing is a false
+        positive. A date the data does not cover is neither a hit nor a miss and is marked
+        in_data False.
 
-        For a miss, 'state' is what the machine was doing on the date and the block columns
-        collect the reasons it recorded within the tolerance window - between them they say
-        why nothing fired.
+        A miss carries a reason: the nearest firing when there is one close by, otherwise
+        what the machine was doing on the date - the uptrend it was still in, the clause that
+        stopped the day 0, or the clause that stopped the follow through - read off the
+        state and the block marks within the window.
 
     :param sv: the signal values
-    :param refs: the reference list, as load_references returns it
-    :param tolerance: how many trading days away a firing still counts as a hit
-    :return: DataFrame with MATCH_COLUMNS, in the order of refs
+    :param truth: the ground truth, as load_ground_truth returns it
+    :param early: how many trading days before the date a firing still counts
+    :param late: how many trading days after the date a firing still counts
+    :return: DataFrame with MATCH_COLUMNS, one row per ground truth date, in date order.
+             'detected' and 'gap' are the matched firing and its distance in trading days
+             (positive when it fired later); 'nearest' and 'nearest_gap' the closest firing
+             whether or not it matched.
     """
     bars = sv.index
     pulse_bars = [int(bars.searchsorted(day, side='left')) for day in pulse_dates(sv)]
+    claimed = {}                                    # pulse bar -> the date that took it
 
     rows = []
-    for ref in refs:
-        day = as_date(ref['date'])
-        row = {'date': day, 'episode': ref.get('episode'), 'kind': ref.get('kind'),
-               'confidence': ref.get('confidence'), 'day1': as_date(ref.get('day1')),
-               'notes': ref.get('notes'), 'detected': None, 'gap': np.nan, 'hit': False,
-               'in_data': False, 'state': None, 'day0_blocks': '', 'ftd_blocks': ''}
+    for entry in sorted(truth, key=lambda e: as_date(e['date'])):
+        day = as_date(entry['date'])
+        row = {'date': day, 'episode': entry.get('episode'), 'kind': entry.get('kind'),
+               'confidence': entry.get('confidence'), 'day1': as_date(entry.get('day1')),
+               'notes': entry.get('notes'), 'in_data': False, 'hit': False, 'detected': None,
+               'gap': np.nan, 'nearest': None, 'nearest_gap': np.nan, 'state': None,
+               'day0_blocks': '', 'ftd_blocks': '', 'reason': 'outside the data'}
         if len(bars) and bars[0] <= day <= bars[-1]:
+            # the date itself, or the next trading day when the underlying did not trade
             target = min(int(bars.searchsorted(day, side='left')), len(bars) - 1)
-            lo, hi = max(0, target - tolerance), min(len(bars), target + tolerance + 1)
-            # the state and the blocks are worth having whether or not anything fired -
-            # a signal that never fires is the case that most needs explaining
-            row.update(in_data=True, state=sv.state.iloc[target],
-                       day0_blocks=_distinct(sv.day0_block.iloc[lo:hi]),
-                       ftd_blocks=_distinct(sv.ftd_block.iloc[lo:hi]))
+            lo, hi = max(0, target - early), min(len(bars) - 1, target + late)
+            row.update(in_data=True, reason='', state=sv.state.iloc[target],
+                       day0_blocks=_distinct(sv.day0_block.iloc[lo:hi + 1]),
+                       ftd_blocks=_distinct(sv.ftd_block.iloc[lo:hi + 1]))
             if pulse_bars:
-                gap = min((bar - target for bar in pulse_bars), key=abs)
-                row.update(detected=bars[target + gap], gap=gap,
-                           hit=abs(gap) <= tolerance)
+                nearest = min(pulse_bars, key=lambda bar: (abs(bar - target), bar))
+                row.update(nearest=bars[nearest], nearest_gap=nearest - target)
+                free = [bar for bar in pulse_bars if lo <= bar <= hi and bar not in claimed]
+                if free:
+                    best = min(free, key=lambda bar: (abs(bar - target), bar))
+                    claimed[best] = day
+                    row.update(hit=True, detected=bars[best], gap=best - target)
+            if not row['hit']:
+                row['reason'] = _miss_reason(sv, target, row, claimed)
         rows.append(row)
     return pd.DataFrame(rows, columns=MATCH_COLUMNS)
+
+
+def _miss_reason(sv, target, row, claimed):
+    """ Why nothing fired for a ground truth date, in words - see match_ground_truth. """
+    gap = row['nearest_gap']
+    if row['nearest'] is not None and abs(gap) <= NEAR_MISS_DAYS:
+        when = f"{abs(gap):.0f}d {'late' if gap > 0 else 'early'}" if gap else "on the day"
+        rv = f"fired {when} ({row['nearest']})"
+        taken = claimed.get(int(sv.index.searchsorted(row['nearest'], side='left')))
+        return rv + (f", already matched to {taken}" if taken else "")
+
+    state = row['state']
+    if state == FTDSignal.UPTREND:
+        return f"still in the uptrend of the {sv.ftd_date.iloc[target]} follow through day"
+    if state == FTDSignal.WATCHING:
+        return (f"no day 0: {row['day0_blocks']}" if row['day0_blocks']
+                else "no new low to test as a day 0")
+    if state == FTDSignal.DAY0:
+        return "day 0 made, waiting for day 1"
+    rally_day = sv.rally_day.iloc[target]
+    where = "in the rally attempt" + ("" if pd.isna(rally_day) else f" (day {rally_day:.0f})")
+    if row['ftd_blocks']:
+        return f"{where}: follow through blocked by {row['ftd_blocks']}"
+    return f"{where}: no day gained the minimum"
+
+
+def false_positive_dates(matches, pulses):
+    """ The firings no ground truth date claimed, in time order. """
+    detected = {as_date(day) for day in matches.detected[matches.hit]}
+    return [day for day in pulses if as_date(day) not in detected]
+
+
+def verification_stats(matches, pulses, trading_days):
+    """
+        The verification statistics of docs/SIGNALS.md: a positive is a firing, a true
+        positive one that matched a ground truth date, and a ground truth date counts only
+        when the data covers it.
+    :param matches: the match table, as match_ground_truth returns it
+    :param pulses: the firing dates, as pulse_dates returns them
+    :param trading_days: the length of the simulation range
+    :return: dict with 'ground_truth' (in the data), 'ground_truth_total', 'positives',
+             'true_positives', 'false_positives', 'trading_days', 'precision', 'recall' and
+             'f1' - the rates NaN where undefined
+    """
+    scored = matches[matches.in_data.astype(bool)]
+    tp, positives = int(scored.hit.sum()), len(pulses)
+    precision = tp / positives if positives else np.nan
+    recall = tp / len(scored) if len(scored) else np.nan
+    f1 = (2 * precision * recall / (precision + recall)
+          if positives and len(scored) and precision + recall else np.nan)
+    return {'ground_truth': len(scored), 'ground_truth_total': len(matches),
+            'positives': positives, 'true_positives': tp, 'false_positives': positives - tp,
+            'trading_days': trading_days, 'precision': precision, 'recall': recall, 'f1': f1}
 
 
 def _distinct(marks):
@@ -384,11 +521,12 @@ def _distinct(marks):
 # Sensitivity to the parameters
 # ----------------------------------------------------------------------------------
 
-SENSITIVITY_COLUMNS = ['setting', 'pulses', 'references_hit', 'references', 'failure_rate']
+SENSITIVITY_COLUMNS = ['setting', 'pulses', 'hits', 'ground_truth', 'precision', 'recall',
+                       'failure_rate']
 
 
-def sensitivity(ohlcv, grid, refs, base_params=None, factory=FTDSignal, env=None,
-                tolerance=10, horizon=20):
+def sensitivity(ohlcv, grid, truth, base_params=None, factory=FTDSignal, env=None,
+                early=EARLY_DAYS, late=LATE_DAYS, horizon=20):
     """
         Re-runs the signal over a small grid of parameter settings, one parameter away from
         the base setting at a time, and reports what each setting buys.
@@ -396,17 +534,16 @@ def sensitivity(ohlcv, grid, refs, base_params=None, factory=FTDSignal, env=None
     :param ohlcv: the underlying's prices
     :param grid: mapping of parameter name -> the values to try, e.g.
                  {'min_decline': [0.08, 0.10], 'min_peak_age_days': [15, 20, 25]}
-    :param refs: the reference list, as load_references returns it; only the references
-                 count towards 'references_hit', the candidates are not expectations
+    :param truth: the ground truth, as load_ground_truth returns it
     :param base_params: the constructor arguments of the signal the report is about; the
                         factory's own defaults when None
     :param factory: builds the signal from the parameters, FTDSignal by default
     :param env: the Environment the signal loads its index prices from, when it needs one
+    :param early, late: the matching tolerance, as match_ground_truth takes it
     :param horizon: the forward horizon whose median return is reported
     :return: DataFrame, one row per setting, the base setting first
     """
     base_params = dict(base_params or {})
-    references = [ref for ref in refs if ref.get('kind') == 'reference']
     median_column = f'median r{horizon}'
 
     settings = [('base', base_params)]
@@ -421,11 +558,13 @@ def sensitivity(ohlcv, grid, refs, base_params=None, factory=FTDSignal, env=None
         if env is not None:
             signal.bind(env)
         sv = signal(ohlcv)
+        pulses = pulse_dates(sv)
         episodes = extract_episodes(ohlcv, sv)
-        matched = match_references(sv, references, tolerance)
-        outcomes = forward_outcomes(ohlcv, pulse_dates(sv), (horizon,))
-        rows.append({'setting': label, 'pulses': int(sv.es.sum()),
-                     'references_hit': int(matched.hit.sum()), 'references': len(references),
+        stats = verification_stats(match_ground_truth(sv, truth, early, late), pulses, len(sv))
+        outcomes = forward_outcomes(ohlcv, pulses, (horizon,))
+        rows.append({'setting': label, 'pulses': stats['positives'],
+                     'hits': stats['true_positives'], 'ground_truth': stats['ground_truth'],
+                     'precision': stats['precision'], 'recall': stats['recall'],
                      'failure_rate': failure_rate(episodes),
                      median_column: outcomes[f'r{horizon}'].median()})
     return pd.DataFrame(rows, columns=SENSITIVITY_COLUMNS + [median_column])

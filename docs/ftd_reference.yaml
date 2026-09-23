@@ -1,9 +1,8 @@
 # Reference and candidate Follow Through Days.
 #
-# This file is the source of truth the code uses: test/integration/test_ftd_qqq.py checks the
-# signal against it and backfire/report_signal.py builds the reference gallery from it. The
-# tables in docs/SIGNALS.md say the same thing for a reader; when the two disagree, this file
-# wins and the tables are the ones to fix.
+# This file is the primary source of the dates of IBD Follow Through Day calls:
+# test/integration/test_ftd_qqq.py checks the signal against it and backfire/ftd_signal_verification_report.py
+# builds the reference gallery from it. docs/SIGNALS.md, 'Signal verification', points here.
 #
 # Every entry has:
 #   date        the Follow Through Day itself
@@ -15,7 +14,7 @@
 #   confidence   for a candidate: 'medium' (fairly sure of the date), 'low' (an FTD happened
 #               around then but the date may be off) or 'contradicted' (the recalled date
 #               fails a plausibility check on QQQ, so the real FTD is a nearby day). Null for
-#               a reference, which SIGNALS.md does not grade.
+#               a reference, which is not graded.
 #   notes       the context, and for a candidate the QQQ close to close gain on the date and
 #               whether QQQ volume rose
 #
@@ -25,13 +24,13 @@
 #   unreachable.block             the clause it fails, as the signal's 'day0_block' records it
 #   unreachable.detected_instead  the Follow Through Day the rules confirm the bottom on
 #
-# SIGNALS.md also mentions Oct 15, 1998 (the surprise Fed cut after the Oct 8 LTCM low) as an
-# episode where an FTD almost certainly happened. It has no confirmed date and predates the
-# QQQ data, so it is prose there rather than an entry here.
+# Oct 15, 1998 (the surprise Fed cut after the Oct 8 LTCM low) is an episode where an FTD
+# almost certainly happened. It has no confirmed date and predates the QQQ data, so it is
+# listed in docs/turnaround_points.csv rather than here.
 
 follow_through_days:
 
-  # --- references: docs/SIGNALS.md, 'Reference follow-through days' ---------------------
+  # --- references: IBD style discretionary calls on the Nasdaq Composite -----------------
 
   - date: 2001-04-10
     episode: Dot-com crash 1
@@ -133,7 +132,7 @@ follow_through_days:
     day1: 2023-10-27
     kind: reference
     confidence: null
-    notes: SIGNALS.md marks the exact date '???'.
+    notes: Exact date uncertain.
 
   - date: 2025-04-22
     episode: '2025'
@@ -147,9 +146,9 @@ follow_through_days:
     day1: 2026-03-31
     kind: reference
     confidence: null
-    notes: SIGNALS.md marks the exact date '???'.
+    notes: Exact date uncertain.
 
-  # --- candidates: docs/SIGNALS.md, 'Candidate FTD test cases' --------------------------
+  # --- candidates ---------------------------------------------------------------------
   # Recalled, not yet confirmed against IBD's archive. Not expectations until they have been.
 
   - date: 1991-01-17
