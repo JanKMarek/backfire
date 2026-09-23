@@ -402,7 +402,7 @@ Yaml file for the signal (see `docs/SIGNALS.md` for what the FTD parameters mean
 ```yaml
   signal:
     name: FTDSignal
-    index: IXIC
+    index: ^IXIC
     min_decline: 0.08
     min_peak_age_days: 20
     day0_window: 5
@@ -465,8 +465,10 @@ The page has these parts:
   ground truth date shows the firing date, the reason for not firing and the note recorded for
   the date; a false positive its firing date. Every firing also shows its rally day, gain and what
   became of the uptrend, and each row links to its chart
-- **what followed a firing**: the average path of the underlying for up to 60 trading days,
-  with an interquartile band, and the forward returns at 5, 20 and 60 days against two
+- **what followed a firing**: the average path of the underlying for up to 60 trading days
+  for all follow-through days (with an interquartile band), the successful ones (the uptrend
+  held until a new correction) and the failed ones, a table of their median return at 5, 10,
+  20, 40 and 60 days, and the forward returns at 5, 20 and 60 days against two
   baselines - every day, and "naive follow-through days" that apply the gain and volume tests
   with none of the correction, Day 0 or day-count logic around them. Measured from the **next
   day's open** the way `SignalDrivenStrategy` executes a signal

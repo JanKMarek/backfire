@@ -30,6 +30,10 @@ uv run python backfire/ftd_signal_verification_report.py --underlying QQQ --star
   `match_ground_truth` (replacing `match_references`), `false_positive_dates` and
   `verification_stats`; `sensitivity` scores against a ground truth list with the same
   tolerance and reports `hits`, `ground_truth`, `precision` and `recall`.
+- **Successful against failed.** The average path chart draws one line each for all, the
+  successful (ended in a new correction) and the failed follow-through days, and a new table gives
+  their median return at 5, 10, 20, 40 and 60 days. `signal_analysis.py` gains
+  `ftd_dates_by_fate` and `path_table`; `run_report` returns the table as `path_stats`.
 
 # September 21, 2026 - signal analysis report
 

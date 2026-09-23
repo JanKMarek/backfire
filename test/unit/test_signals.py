@@ -744,8 +744,8 @@ def test_ftd_defaults_and_name():
 
     assert (signal.index, signal.min_decline, signal.min_peak_age_days, signal.day0_window,
             signal.ftd_min_gain, signal.ftd_min_days, signal.ftd_max_days) \
-        == ("IXIC", 0.08, 20, 5, 0.0125, 4, 25)
-    assert signal.name == "FTD_IXIC_0.08_20_5_0.0125_4_25"
+        == ("^IXIC", 0.08, 20, 5, 0.0125, 4, 25)
+    assert signal.name == "FTD_^IXIC_0.08_20_5_0.0125_4_25"
     assert FTDSignal(index=None).name == "FTD_0.08_20_5_0.0125_4_25"
 
 

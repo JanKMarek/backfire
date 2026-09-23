@@ -40,8 +40,9 @@
       - the scorecard: the ground truth dates and the false positives in one table, in date
         order - a ground truth date with the firing that matched it, or the reason nothing
         did, and the note recorded for the date; a false positive with its firing
-      - what followed a firing: the average path of the underlying up to 60 trading days out,
-        and the forward returns against two baselines
+      - what followed a firing: the average path of the underlying up to 60 trading days out
+        for all, the successful and the failed Follow Through Days, their median return at 5,
+        10, 20, 40 and 60 days, and the forward returns against two baselines
       - the rally attempts: how they ended, the rally day the Follow Through Day lands on,
         and the attempts that were never confirmed
       - the sensitivity of the statistics to the parameters, one parameter away at a time
@@ -77,6 +78,13 @@ CONTEXT_BARS = 60
 # followed to the longest and a panel caption quotes the middle one
 FORWARD_HORIZONS = (5, 20, 60)
 CAPTION_HORIZON = FORWARD_HORIZONS[1]
+# the days along the path the successful and the failed Follow Through Days are compared at
+PATH_DAYS = (5, 10, 20, 40, 60)
+# the groups of Follow Through Days the paths are split into - see
+# signal_analysis.ftd_dates_by_fate - with the label and the colour each is shown in
+_FATES = {'all': ("all FTDs", '#1f4e79'),
+          'successful': ("successful FTDs", '#2e7d32'),
+          'failed': ("failed FTDs", '#c62828')}
 # the grid the sensitivity table walks, one parameter away from the run's own setting
 SENSITIVITY_GRID = {'min_decline': [0.08, 0.10],
                     'min_peak_age_days': [15, 20, 25],
@@ -509,22 +517,34 @@ def _draw_rally_numbers(fig, svw, window, days):
             row=1, col=1)
 
 
-def forward_path_figure(paths):
-    """ The average path of the return after a firing, with an interquartile band. """
+def forward_path_figure(paths, groups):
+    """
+        The average path of the return after a Follow Through Day, one line per group - all
+        of them, the successful ones and the failed ones - with the interquartile band of all.
+    :param paths: the forward paths, as signal_analysis.forward_paths returns them
+    :param groups: the firing days by group, as signal_analysis.ftd_dates_by_fate returns them
+    """
     fig = go.Figure()
-    if not paths.empty:
-        x = list(paths.columns)
-        mean, low, high = paths.mean(), paths.quantile(0.25), paths.quantile(0.75)
+    x = list(paths.columns)
+    everything = paths[paths.index.isin(groups.get('all', []))]
+    if not everything.empty:
+        low, high = everything.quantile(0.25), everything.quantile(0.75)
         fig.add_trace(go.Scatter(x=x + x[::-1],
                                  y=_round(high, 4) + _round(low, 4)[::-1],
                                  fill='toself', fillcolor='rgba(74,144,217,0.18)',
                                  line=dict(width=0), hoverinfo='skip',
-                                 name='interquartile range'))
-        fig.add_trace(go.Scatter(x=x, y=_round(mean, 4), mode='lines',
-                                 line=dict(color='#1f4e79', width=2), name='mean',
-                                 hovertemplate="day %{x}: %{y:.2%}<extra></extra>"))
+                                 name='interquartile range, all FTDs'))
+    for fate, dates in groups.items():
+        group = paths[paths.index.isin(dates)]
+        if group.empty:
+            continue
+        label, color = _FATES.get(fate, (fate, '#555555'))
+        fig.add_trace(go.Scatter(x=x, y=_round(group.mean(), 4), mode='lines',
+                                 line=dict(color=color, width=2),
+                                 name=f"{label} ({len(group)})",
+                                 hovertemplate=f"{label}, day %{{x}}: %{{y:.2%}}<extra></extra>"))
     fig.add_hline(y=0, line=dict(color='#999999', width=1))
-    fig.update_layout(height=300, margin=dict(l=56, r=16, t=16, b=40),
+    fig.update_layout(height=340, margin=dict(l=56, r=16, t=36, b=40),
                       plot_bgcolor='#ffffff', paper_bgcolor='#ffffff', font=dict(size=11),
                       legend=dict(orientation='h', y=1.12),
                       xaxis_title="trading days after the firing",
@@ -728,6 +748,16 @@ def forward_table_html(table, horizons):
     return html_table(headers, rows)
 
 
+def path_table_html(table):
+    """ The median return along the path, a row per group of Follow Through Days. """
+    days = [column for column in table.columns if column.startswith('median r')]
+    rows = [[esc(_FATES.get(name, (name,))[0]), f"{int(row['count'])}",
+             *[fmt_pct(row[column]) for column in days]]
+            for name, row in table.iterrows()]
+    return html_table(["", "count", *[f"median @{column[len('median r'):]}d" for column in days]],
+                      rows)
+
+
 def sensitivity_table_html(table, horizon):
     rows = [[esc(row['setting']), f"{int(row['pulses'])}",
              f"{int(row['hits'])} / {int(row['ground_truth'])}",
@@ -810,7 +840,8 @@ def run_report(signal_conf, underlying, start_date, end_date=None, md="./md", ou
     :param grid: the parameter grid of the sensitivity table, SENSITIVITY_GRID by default
     :return: dict with 'paths' (the files written, by name), 'signal', 'ohlcv',
              'signal_values', 'episodes', 'scorecard' (the match table), 'stats',
-             'false_positives', 'paths_after' (the forward paths), 'sensitivity' and 'html'
+             'false_positives', 'paths_after' (the forward paths), 'path_stats' (their medians
+             by what became of the Follow Through Day), 'sensitivity' and 'html'
     """
     env = Environment(md=md, out_dir=out)
     signal = build_component(signal_conf['signal'], SIGNALS, 'signal')
@@ -835,6 +866,8 @@ def run_report(signal_conf, underlying, start_date, end_date=None, md="./md", ou
     forward_days, quoted = horizons[-1], horizons[len(horizons) // 2]
     outcomes = sa.forward_outcomes(ohlcv, pulses, horizons)
     paths = sa.forward_paths(ohlcv, pulses, forward_days)
+    fates = sa.ftd_dates_by_fate(episodes)
+    path_stats = sa.path_table(paths, fates, PATH_DAYS)
     table = sa.forward_table(ohlcv, {f"{signal.name} firings": pulses,
                                      **sa.baseline_dates(ohlcv, signal)}, horizons)
     base = {k: v for k, v in signal_conf['signal'].items() if k != 'name'}
@@ -858,10 +891,19 @@ def run_report(signal_conf, underlying, start_date, end_date=None, md="./md", ou
         scorecard_html(matches, false_positives, episodes),
         "<h2>What followed a firing</h2>",
         "<h3>The average path after a firing</h3>",
-        f"<p class='note'>The mean return over all {stats['positives']} firings for up to "
-        f"{forward_days} trading days after, with the interquartile band. Measured from "
-        f"the next day's open, the way SignalDrivenStrategy executes a signal.</p>",
-        plot_div("fwd-path", forward_path_figure(paths)),
+        f"<p class='note'>The mean return for up to {forward_days} trading days after a "
+        f"firing: over all {len(fates['all'])} follow through days, with their interquartile "
+        f"band, over the {len(fates['successful'])} successful ones - the uptrend held until "
+        f"a new correction - and over the {len(fates['failed'])} failed ones the index closed "
+        f"back below the rally low. An uptrend still open at the end of the data counts only "
+        f"under all. Measured from the next day's open, the way SignalDrivenStrategy executes "
+        f"a signal. Whether a follow through day failed is only known afterwards, so the split "
+        f"is hindsight, not something to trade on.</p>",
+        plot_div("fwd-path", forward_path_figure(paths, fates)),
+        "<h3>Along the path, successful against failed</h3>",
+        "<p class='note'>The median return at each day after the firing; the count is the "
+        "firings with a path, and a path the data cuts short drops out of the later days.</p>",
+        path_table_html(path_stats),
         "<h3>Against the baselines</h3>",
         "<p class='note'>'naive FTD days' applies the gain and volume tests to every day "
         "with none of the correction, day 0 or day count logic around them.</p>",
@@ -900,7 +942,7 @@ def run_report(signal_conf, underlying, start_date, end_date=None, md="./md", ou
     return {'paths': paths_written, 'signal': signal, 'ohlcv': ohlcv, 'signal_values': sv,
             'episodes': episodes, 'scorecard': matches, 'stats': stats,
             'false_positives': false_positives, 'paths_after': paths,
-            'sensitivity': settings, 'html': body}
+            'path_stats': path_stats, 'sensitivity': settings, 'html': body}
 
 
 def main(argv=None):

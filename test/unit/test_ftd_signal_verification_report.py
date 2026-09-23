@@ -230,6 +230,19 @@ def test_the_page_has_the_analysis_sections(report):
     assert "<td>ftd_min_gain=0.05</td><td>0</td><td>0 / 2</td>" in page
 
 
+def test_the_paths_are_split_into_successful_and_failed_follow_through_days(report):
+    page = open(report['paths']['report'], encoding="utf-8").read()
+    stats = report['path_stats']
+
+    # the one uptrend is still open when the data ends: it counts under all FTDs only
+    assert stats['count'].tolist() == [1, 0, 0]
+    # the paths run 10 days here, so only the 5 and 10 day medians are shown
+    assert stats.columns.tolist() == ['count', 'median r5', 'median r10']
+    assert "<h3>Along the path, successful against failed</h3>" in page
+    assert "<th>median @5d</th><th>median @10d</th></tr>" in page
+    assert "<td>failed FTDs</td><td>0</td><td>-</td><td>-</td>" in page
+
+
 def test_the_gallery_has_a_panel_per_ground_truth_date(report):
     page = open(report['paths']['report'], encoding="utf-8").read()
 

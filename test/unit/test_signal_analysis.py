@@ -13,10 +13,12 @@ from backfire.signal_analysis import (
     forward_outcomes,
     forward_paths,
     forward_table,
+    ftd_dates_by_fate,
     load_ground_truth,
     load_references,
     load_turnaround_points,
     match_ground_truth,
+    path_table,
     pulse_dates,
     sensitivity,
     verification_stats,
@@ -211,6 +213,43 @@ def test_the_forward_path_is_one_column_per_trading_day_after_the_signal(rising)
     assert rv.columns.tolist() == [1, 2, 3]
     assert rv.iloc[0].tolist() == pytest.approx([101.0 / 100.5 - 1, 102.0 / 100.5 - 1,
                                                  103.0 / 100.5 - 1])
+
+
+def test_the_follow_through_days_are_grouped_by_what_became_of_them():
+    # a Follow Through Day on day 7 that fails on day 8, and a second one on day 12 that is
+    # still open when the data ends
+    closes = DECLINE_AND_RALLY + [91.5, 92.5, 92.6, 92.7, 94.6]
+    ohlcv, sv = run(closes, FTD_VOLUMES + [100.0] * 4 + [200.0])
+
+    rv = ftd_dates_by_fate(extract_episodes(ohlcv, sv))
+
+    assert rv == {'all': [ohlcv.index[7], ohlcv.index[12]], 'successful': [],
+                  'failed': [ohlcv.index[7]]}
+
+
+def test_a_follow_through_day_that_ends_in_a_new_correction_is_successful():
+    closes = DECLINE_AND_RALLY + [100.0, 105.0, 110.0, 108.0, 105.0, 102.0]
+    ohlcv, sv = run(closes, FTD_VOLUMES + [100.0] * 6)
+
+    rv = ftd_dates_by_fate(extract_episodes(ohlcv, sv))
+
+    assert rv['successful'] == [ohlcv.index[7]]
+    assert rv['failed'] == []
+
+
+def test_the_path_table_is_the_median_of_each_group_at_each_day(rising):
+    paths = forward_paths(rising, [rising.index[0], rising.index[2], rising.index[4]], horizon=3)
+    groups = {'all': list(rising.index[[0, 2, 4]]), 'failed': [rising.index[2]],
+              'none': []}
+
+    rv = path_table(paths, groups, days=(1, 3, 5))
+
+    # day 5 is past the horizon of the paths and is left out
+    assert rv.columns.tolist() == ['count', 'median r1', 'median r3']
+    assert rv['count'].tolist() == [3, 1, 0]
+    assert rv.loc['all', 'median r1'] == pytest.approx(103.0 / 102.5 - 1)
+    assert rv.loc['failed', 'median r3'] == pytest.approx(105.0 / 102.5 - 1)
+    assert pd.isna(rv.loc['none', 'median r1'])
 
 
 def test_the_naive_baseline_is_the_gain_and_the_volume_without_the_state_machine():

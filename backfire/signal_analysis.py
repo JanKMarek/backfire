@@ -11,7 +11,8 @@
         the result into precision, recall and F1. extract_episodes reads the diagnostics the
         signal records day by day (see FTDSignal) so that every miss can be explained.
       - does a firing mark a real turnaround? forward_outcomes, forward_paths and
-        baseline_dates measure what happened after each firing and against what.
+        baseline_dates measure what happened after each firing and against what;
+        ftd_dates_by_fate and path_table split that by whether the Follow Through Day held.
 
     Only extract_episodes and the miss reasons are specific to the Follow Through Day signal -
     they read the 'event' and block columns of FTDSignal. Everything else works off the
@@ -339,6 +340,42 @@ def forward_paths(ohlcv, dates, horizon=60):
         index.append(day)
     return pd.DataFrame(rows, index=pd.Index(index, name='date'),
                         columns=range(1, horizon + 1))
+
+
+def ftd_dates_by_fate(episodes):
+    """
+        The Follow Through Days grouped by what became of the uptrend each one started: 'all'
+        of them, the 'successful' ones - the uptrend held until a new correction re-armed the
+        signal - and the 'failed' ones the index closed back below the rally low. An uptrend
+        still open at the end of the data is neither, and counts only under 'all'.
+    :param episodes: the rally attempts, as extract_episodes returns them
+    :return: dict of name -> list of days
+    """
+    ftds = episodes[episodes.outcome == 'FTD']
+    return {'all': list(ftds.ftd_date),
+            'successful': list(ftds.ftd_date[ftds.uptrend_end == 'NEW_CORRECTION']),
+            'failed': list(ftds.ftd_date[ftds.uptrend_end == 'FTD_FAILED'])}
+
+
+def path_table(paths, groups, days=(5, 10, 20, 40, 60)):
+    """
+        The median of the forward paths at the given days, one row per named set of days.
+    :param paths: the forward paths, as forward_paths returns them
+    :param groups: dict of name -> list of days, e.g. ftd_dates_by_fate(...)
+    :param days: trading days after the signal day; a day past the horizon of the paths is
+                 left out
+    :return: DataFrame with the 'count' of paths and 'median r{d}' per day
+    """
+    days = [d for d in days if d in paths.columns]
+    rows, index = [], []
+    for name, dates in groups.items():
+        group = paths[paths.index.isin(dates)]
+        row = {'count': len(group)}
+        for d in days:
+            row[f'median r{d}'] = group[d].median()
+        rows.append(row)
+        index.append(name)
+    return pd.DataFrame(rows, index=index, columns=['count'] + [f'median r{d}' for d in days])
 
 
 def baseline_dates(ohlcv, signal):
