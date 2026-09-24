@@ -96,6 +96,19 @@ Simulating the FTD signal over the period 1999-2026 shows using standard paramet
 - signal firings: 48 were matched against ground truth dates, 26 were false positives. Some false positives were due to FTD price being close to the FDR low (and so visually these were not marked as turnaround points).  
 - qualitatively, signal captures well turnarounds after a correction. It does not do so well to capture two other types of trend starts: breakouts from sideways markets (due to lack of correction) and volatility explosions (since there may not be a strong up day on high volume to confirm the direction). 
 - of the 73 FTD firings, 23 failed later and 50 ended in a new correction
+- most missed FTDs missed due to min_peak_age_days=15 (often the peak was picked since the last FTD and so was too close. use window?)
+
+Notes on recent firings: 
+  - matched 11 true positives - all major (hand-picked) trend starts since the Covid crash 
+  - produced 3 false positives: FTD occurred on days 21, 16, 19 (so late), 
+  - produced 1 miss: Nov 10, 2022, still in uptrend (only looking back to prev Oct 21, 2022 FTD so not enough correction)
+  - produced 1 miss: Mar 11, 2022, no corr'n due to Day 0 happening 13 trading days after peak
+In more distant past, there were false positives due to the FTD happening 
+
+Note: no confidence intervals, no train/validate/test split of training data, 
+  - forward return table shows practically no edge over the market
+  - ground truth is signal aware (handpicking not turnaround points but FTD points)
+  - 
 
 
 
