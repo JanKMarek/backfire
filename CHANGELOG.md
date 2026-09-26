@@ -1,3 +1,17 @@
+# September 24, 2026 - Trades tab in the strategy dashboard
+
+The Data Pane of `backfire/visualize.py` is now tabbed: Monthly Returns (as before) and Trades.
+
+- **Trades tab.** A sortable table of the run's trades, initially by entry date: entry date and
+  price, exit date and price, exit reason, P&L, return and days held. The exit reason is read from
+  the trade memo: the exit signal's name, 'stop loss' or 'end of backtest'. Return is computed
+  from the prices, as the stored `pnl_pcnt` is rounded to 0.01.
+- **Selecting a trade** draws a translucent band from its entry to its exit in the Chart Pane, with
+  rings on the two markers; the zoom is kept. Each tab keeps its own selection and the chart shows
+  the one of the visible tab. Sorting the table clears the selection.
+- **Fix.** The clicked cell of the Monthly Returns table is now yellow; Dash's own pink active
+  cell colour used to hide it.
+
 # September 23, 2026 - FTD signal verification report
 
 `backfire/ftd_signal_verification_report.py`, renamed from `backfire/report_signal.py`, now

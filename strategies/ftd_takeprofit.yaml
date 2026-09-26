@@ -1,17 +1,17 @@
 strategy:
-  name: FTD_BelowMA
+  name: FTD_TakeProfit
   entry_signal:
     name: FTDSignal
     index: null # will use the underlying
     min_decline: 0.08 # of the day 0 low below the peak
-    min_peak_age_days: 20 # trading days
+    min_peak_age_days: 15 # trading days
     day0_window: 5 # trading days
     ftd_min_gain: 0.0125
     ftd_min_days: 4 # trading days
-    ftd_max_days: 25 # trading days
+    ftd_max_days: 10 # trading days
   exit_signal:
-    name: RetracementSignal
-    retracement: 0.1
+    name: TakeProfitSignal
+    threshold: 0.2
   risk_management:
     name: BasicRiskManagement
     stop_loss: 0.1

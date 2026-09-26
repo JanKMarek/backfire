@@ -3,7 +3,6 @@ import math
 from datetime import datetime, date
 import pandas as pd
 import numpy as np
-import pandas_datareader as pdr
 
 # Trading days in a year, used to annualize metrics computed over the daily equity curve.
 _TRADING_DAYS_PER_YEAR = 252
@@ -47,12 +46,13 @@ class Environment:
         if isinstance(self.md, pd.DataFrame):
             return self.md
 
-        if not os.path.exists(os.path.join(self.md, f'{ticker}.csv')):
-            print(f"Downloading stock price data for {ticker}! ")
-            df = pdr.DataReader(ticker, 'yahoo', start='2010-01-01', end=date.today().isoformat())
-            df.to_csv(os.path.join(self.md, f'{ticker}.csv'))
+        path = os.path.join(self.md, f'{ticker}.csv')
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"No market data for {ticker} at {path}. Download it first, e.g.:\n"
+                f"    uv run python tools/download_md.py \"{ticker}\" --start 2000-01-01 --md {self.md}")
 
-        t = pd.read_csv(os.path.join(self.md, f'{ticker}.csv'), header=0)
+        t = pd.read_csv(path, header=0)
         t = t[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
         t.columns = ['Date', 'O', 'H', 'L', 'C', 'V']
         t['Date'] = pd.to_datetime(t.Date).dt.date

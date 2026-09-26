@@ -5,10 +5,14 @@ import pytest
 from backfire import visualize
 from backfire.visualize import (
     build_figure,
+    create_app,
     drawdown_episodes,
+    exit_reason,
     figure_title,
     find_run_files,
     highlight_for_cell,
+    highlight_for_selection,
+    highlight_for_trade,
     key_statistics,
     load_positions,
     load_run,
@@ -22,6 +26,10 @@ from backfire.visualize import (
     signal_names,
     stat_value,
     table_records,
+    trade_records,
+    trade_rings,
+    trade_shapes,
+    trades_style,
 )
 
 
@@ -479,30 +487,33 @@ def test_clicking_the_month_label_column_clears_the_highlight():
     rows = [{'Month': 'January', '2020': 0.1}]
     active_cell = {'row': 0, 'column_id': 'Month'}
 
-    shapes, styles = highlight_for_cell(active_cell, rows, ['2020'])
-
-    assert shapes == []
-    assert not any(s.get('backgroundColor') == 'yellow' for s in styles)
+    assert highlight_for_cell(active_cell, rows) == []
 
 
 def test_no_active_cell_leaves_the_chart_unmarked():
-    shapes, styles = highlight_for_cell(None, [], ['2020'])
-
-    assert shapes == []
-    assert styles == returns_style(['2020'])
+    assert highlight_for_cell(None, []) == []
 
 
-def test_clicking_a_cell_marks_it_and_installs_two_vertical_markers():
+def test_clicking_a_cell_installs_two_vertical_markers():
     rows = [{'Month': 'January', '2020': 0.1}, {'Month': 'February', '2020': -0.1}]
     active_cell = {'row': 1, 'column_id': '2020'}
 
-    shapes, styles = highlight_for_cell(active_cell, rows, ['2020'])
+    shapes = highlight_for_cell(active_cell, rows)
 
     assert len(shapes) == 2
     assert all(s['yref'] == 'paper' for s in shapes)
-    yellow = [s for s in styles if s.get('backgroundColor') == 'yellow']
-    assert yellow == [{'if': {'row_index': 1, 'column_id': '2020'},
-                       'backgroundColor': 'yellow', 'color': 'black'}]
+
+
+def test_the_clicked_cell_of_a_year_column_is_yellow_and_the_month_column_is_not():
+    style = returns_style(['2020'])
+
+    yellow = [s for s in style if s.get('backgroundColor') == 'yellow']
+    assert {(s['if']['state'], s['if']['column_id']) for s in yellow} == {
+        ('active', '2020'), ('selected', '2020')}
+    # Dash paints the active cell pink after the plain rules; only a state rule beats
+    # that, and among state rules the later one wins, so yellow must come last
+    assert style.index(yellow[0]) > max(i for i, s in enumerate(style)
+                                        if s['if'].get('state') and 'column_id' not in s['if'])
 
 
 def test_the_returns_table_colours_gains_green_and_losses_red():
@@ -512,6 +523,209 @@ def test_the_returns_table_colours_gains_green_and_losses_red():
            'backgroundColor': 'lightgreen', 'color': 'black'} in style
     assert {'if': {'filter_query': '{2020} < -0.05', 'column_id': '2020'},
            'backgroundColor': 'lightcoral', 'color': 'black'} in style
+
+
+# ------------------------------------------------------------------------------
+# Trades table
+# ------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("memo, expected", [
+    ("bought:13 shares;FTD_0.08 / sold:-13 shares;TakeProfit_0.2", "TakeProfit_0.2"),
+    ("bought:1 shares;A / sold:-1 shares;OrSignal_50dMAAbove200MA_x",
+     "OrSignal_50dMAAbove200MA_x"),
+    ("bought:10 shares;FTD / sold:-10 shares;sl", "stop loss"),
+    ("bought:6 shares;FTD / sold-lastday", "end of backtest"),
+    (np.nan, ""),
+    (None, ""),
+    ("bought:6 shares;FTD", ""),
+])
+def test_the_exit_reason_is_read_from_the_memo(memo, expected):
+    assert exit_reason(memo) == expected
+
+
+def _trades_frame(rows):
+    return pd.DataFrame(
+        [{'ticker': 'T', 'entry_date': pd.Timestamp(e), 'entry_price': ep, 'shares': 1,
+          'exit_date': pd.Timestamp(x), 'exit_price': xp, 'memo': m, 'pnl': pnl,
+          'pnl_pcnt': 0.0, 'hp': 5}
+         for e, ep, x, xp, m, pnl in rows])
+
+
+def test_trades_are_numbered_by_entry_date_whatever_the_file_order():
+    trades = _trades_frame([
+        ('2021-05-03', 100.0, '2021-05-10', 110.0, 'bought:1 shares;A / sold:-1 shares;sl', 10),
+        ('2020-01-02', 50.0, '2020-02-03', 45.0, 'bought:1 shares;A / sold:-1 shares;B', -5),
+    ])
+
+    rows = trade_records(trades)
+
+    assert [r['id'] for r in rows] == [1, 2]
+    assert [r['entry_date'] for r in rows] == ['2020-01-02', '2021-05-03']
+    assert [r['reason'] for r in rows] == ['B', 'stop loss']
+
+
+def test_a_trade_row_holds_iso_dates_plain_numbers_and_the_return_from_the_prices():
+    trades = _trades_frame([
+        ('2020-01-02', 7421.36, '2020-04-30', 8911.02,
+         'bought:13 shares;A / sold:-13 shares;TakeProfit_0.2', 19365.57)])
+
+    row = trade_records(trades)[0]
+
+    assert row == {'id': 1, 'entry_date': '2020-01-02', 'entry_price': 7421.36,
+                   'exit_date': '2020-04-30', 'exit_price': 8911.02,
+                   'reason': 'TakeProfit_0.2', 'pnl': 19365.57,
+                   'ret': pytest.approx(8911.02 / 7421.36 - 1), 'hp': 5}
+    assert type(row['entry_price']) is float and type(row['hp']) is int
+
+
+def test_the_fixture_trades_read_back_with_their_exit_reasons(run_folder):
+    rows = trade_records(load_run(run_folder).trades)
+
+    assert [r['reason'] for r in rows] == ['ExitSignal', 'stop loss']
+
+
+def test_no_trades_give_no_rows():
+    assert trade_records(load_trades(None)) == []
+
+
+def _rows_by_id():
+    rows = trade_records(_trades_frame([
+        ('2020-01-02', 50.0, '2020-02-03', 45.0, 'bought:1 shares;A / sold:-1 shares;sl', -5),
+        ('2021-05-03', 100.0, '2021-05-10', 110.0, 'bought:1 shares;A / sold:-1 shares;B', 10),
+    ]))
+    return {r['id']: r for r in rows}
+
+
+def test_a_selected_trade_is_a_band_from_entry_to_exit_and_rings_on_raw_prices():
+    trade = _rows_by_id()[2]
+
+    shapes = trade_shapes(trade)
+    ring_x, ring_y = trade_rings(trade)
+
+    assert len(shapes) == 1
+    assert (shapes[0]['x0'], shapes[0]['x1']) == ('2021-05-03', '2021-05-10')
+    assert (shapes[0]['yref'], shapes[0]['y0'], shapes[0]['y1']) == ('paper', 0, 1)
+    assert ring_x == ['2021-05-03', '2021-05-10']
+    assert ring_y == [100.0, 110.0]      # raw prices: the trace sits on the log price axis
+
+
+def test_a_trade_is_found_by_its_row_id_not_by_its_row_position():
+    by_id = _rows_by_id()
+
+    trade = highlight_for_trade({'row': 0, 'column_id': 'pnl', 'row_id': 2}, by_id)
+
+    assert trade['entry_date'] == '2021-05-03'
+
+
+@pytest.mark.parametrize("active_cell", [
+    None, {'row': 0, 'column_id': 'pnl'}, {'row': 0, 'column_id': 'pnl', 'row_id': 99}])
+def test_no_selection_or_an_unknown_row_id_selects_no_trade(active_cell):
+    assert highlight_for_trade(active_cell, _rows_by_id()) is None
+
+
+def test_the_selected_trades_row_is_filled_and_outlined_whichever_the_sort_order():
+    row_rules = [s['if']['filter_query'] for s in trades_style(2)
+                 if 'filter_query' in s['if'] and 'column_id' not in s['if']]
+
+    assert row_rules == ['{id} = 2']
+    assert not any('{id}' in s['if'].get('filter_query', '') for s in trades_style())
+
+
+def test_pnl_and_return_are_green_when_positive_and_red_when_negative():
+    colours = {(s['if']['column_id'], s['if']['filter_query']): s['color']
+               for s in trades_style() if 'filter_query' in s['if']}
+
+    assert colours[('pnl', '{pnl} > 0')] != colours[('pnl', '{pnl} < 0')]
+    assert colours[('ret', '{ret} > 0')] == colours[('pnl', '{pnl} > 0')]
+    assert colours[('ret', '{ret} < 0')] == colours[('pnl', '{pnl} < 0')]
+
+
+def test_the_active_and_selected_cells_of_the_trades_table_are_not_pink():
+    style = trades_style(1)
+
+    state_rules = [s for s in style if 'state' in s['if']]
+    assert {s['if']['state'] for s in state_rules} == {'active', 'selected'}
+    assert all(s['backgroundColor'] == 'transparent' for s in state_rules)
+
+
+def _selection(tab, returns_cell=None, trades_cell=None):
+    rows = [{'Month': 'January', '2020': 0.1}]
+    return highlight_for_selection(tab, returns_cell, rows, trades_cell, _rows_by_id())
+
+
+def test_the_chart_shows_the_selection_of_the_visible_tab():
+    returns_cell = {'row': 0, 'column_id': '2020'}
+    trades_cell = {'row': 0, 'column_id': 'pnl', 'row_id': 1}
+
+    returns_shapes, ring_x, _, _ = _selection('returns', returns_cell, trades_cell)
+    trades_shapes, trades_ring_x, _, _ = _selection('trades', returns_cell, trades_cell)
+
+    assert len(returns_shapes) == 2 and returns_shapes[0]['line']['dash'] == 'dot'
+    assert ring_x == []
+    assert len(trades_shapes) == 1 and trades_shapes[0]['type'] == 'rect'
+    assert trades_ring_x == ['2020-01-02', '2020-02-03']
+
+
+def test_the_trades_row_stays_marked_while_the_returns_tab_is_visible():
+    trades_cell = {'row': 0, 'column_id': 'pnl', 'row_id': 1}
+
+    *_, styles = _selection('returns', trades_cell=trades_cell)
+
+    assert {'if': {'filter_query': '{id} = 1'},
+            'backgroundColor': visualize._TRADE_ROW_FILL,
+            'border': '1px solid RoyalBlue'} in styles
+
+
+def test_a_tab_without_a_highlight_marks_nothing():
+    trades_cell = {'row': 0, 'column_id': 'pnl', 'row_id': 1}
+
+    shapes, ring_x, ring_y, _ = _selection('pnl-histogram', {'row': 0, 'column_id': '2020'},
+                                           trades_cell)
+
+    assert (shapes, ring_x, ring_y) == ([], [], [])
+
+
+def test_the_figure_carries_an_empty_highlight_trace_for_the_rings(run_folder):
+    fig = build_figure(load_run(run_folder))
+
+    ring = next(t for t in fig.data if t.name == 'trade highlight')
+    assert ring.yaxis == 'y2'
+    assert ring.marker.symbol == 'circle-open'
+    assert len(ring.x) == 0
+
+
+def _find(component, component_id):
+    if getattr(component, 'id', None) == component_id:
+        return component
+    children = getattr(component, 'children', None)
+    if not isinstance(children, (list, tuple)):
+        children = [] if children is None else [children]
+    for child in children:
+        found = _find(child, component_id)
+        if found is not None:
+            return found
+    return None
+
+
+def test_the_data_pane_has_a_returns_tab_and_a_trades_tab_sorted_by_entry_date(run_folder):
+    layout = create_app(load_run(run_folder)).layout
+
+    tabs = _find(layout, 'data-tabs')
+    assert [t.label for t in tabs.children] == ['Monthly Returns', 'Trades (2)']
+    trades = _find(layout, 'trades-table')
+    assert trades.sort_by == [{'column_id': 'entry_date', 'direction': 'asc'}]
+    assert [r['id'] for r in trades.data] == [1, 2]
+    assert _find(layout, 'returns-table') is not None
+
+
+def test_a_run_without_trades_keeps_an_empty_trades_table(run_folder):
+    run = load_run(run_folder)
+    run.trades = load_trades(None)
+
+    layout = create_app(run).layout
+
+    assert _find(layout, 'trades-table').data == []
+    assert _find(layout, 'data-tabs').children[1].label == 'Trades (0)'
 
 
 # ------------------------------------------------------------------------------

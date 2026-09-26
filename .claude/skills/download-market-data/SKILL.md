@@ -1,6 +1,6 @@
 ---
 name: download-market-data
-description: Download or refresh daily OHLCV price history from Yahoo Finance into this project's `md/` market data store using `tools/download_md.py`. Use this whenever the user wants price data for a ticker or index — "download QQQ", "get me Nasdaq Composite history", "update the market data", "refresh SPY through today", "I need ^VIX data since 2010" — or when a backtest, strategy, or signal references a ticker that has no `md/<TICKER>.csv` yet. Use it especially before writing any new download script: the tool already exists, and a naive `yfinance` call from this machine fails on a TLS certificate error that looks like a library bug but is not.
+description: Download or refresh daily OHLCV price history from Yahoo Finance into this project's `md/` market data store using `tools/download_md.py`. Use this whenever the user wants price data for a ticker or index — "download QQQ", "get me Nasdaq Composite history", "update the market data", "refresh SPY through today", "I need ^VIX data since 2010" — or when a backtest, strategy, or signal references a ticker that has no `md/<TICKER>.csv` yet. Use it especially before writing any new download script: the tool already exists.
 ---
 
 # Downloading market data
@@ -107,7 +107,7 @@ Notes on the invocation:
   silently becomes `IXIC`, which is a different (and wrong) symbol.
 - `uv run` is required — yfinance lives in the `dev` dependency group, so a bare `python`
   won't find it.
-- `--start` is required; `--end` defaults to today and is inclusive.
+- `--start` defaults to 1998-01-01; `--end` defaults to today and is inclusive.
 - Several tickers can be passed at once: `... download_md.py QQQ SPY --start 2025-01-01`.
 - **If the market is still open, set `--end` to the last completed session.** Yahoo serves
   the current day as a partial bar whose high, low, close and volume are still moving.
@@ -151,7 +151,5 @@ which is the right choice for signal work: dividend adjustment retroactively rew
 historical prices every time a dividend is paid, so moving averages and breakout levels
 would shift under you between runs.
 
-`load_ohlcv` does have a fallback that auto-downloads when a file is missing, but it
-goes through `pandas-datareader`'s long-broken Yahoo endpoint and only reaches back to
-2010. Treat a missing file as a cue to run this tool, not as something the backtest will
-handle.
+`load_ohlcv` does not download anything: a missing file raises `FileNotFoundError` with
+the command to run. Treat that as a cue to run this tool.

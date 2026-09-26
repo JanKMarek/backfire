@@ -20,8 +20,12 @@
         underlying OHLC on a log right axis, the entry/exit signal regimes as
         translucent bands and the executed trades as markers; it zooms and pans, and
         shows the day's OHLC and portfolio value when the cursor is near the underlying
-      - the data pane tabulates monthly and annual strategy returns; clicking a cell
-        marks the first and the last day of that period in the chart pane
+      - the data pane has two tabs. Monthly Returns tabulates monthly and annual
+        strategy returns; clicking a cell marks the first and the last day of that
+        period in the chart pane. Trades lists the trades in a sortable table, by entry
+        date to begin with; clicking a row marks the trade's entry and exit in the
+        chart pane. Each tab keeps its own selection and the chart pane shows the one
+        of the visible tab. Sorting the trades table clears its selection.
 """
 
 import argparse
@@ -48,6 +52,17 @@ _EXIT_FILL = 'rgba(214, 39, 40, 0.12)'
 _ENTRY_MARKER = '#2ca02c'
 _EXIT_MARKER = '#d62728'
 _HIGHLIGHT_COLOR = 'RoyalBlue'
+_TRADE_BAND_FILL = 'rgba(65, 105, 225, 0.15)'
+_TRADE_ROW_FILL = 'rgba(65, 105, 225, 0.18)'
+_SELECTED_CELL_FILL = 'yellow'
+# marker size, in pixels, of the rings around a selected trade's entry and exit
+_RING_SIZE = 22
+_TRADE_HIGHLIGHT_NAME = 'trade highlight'
+_GAIN_TEXT = '#1a7f1a'
+_LOSS_TEXT = '#c62828'
+
+_RETURNS_TAB = 'returns'
+_TRADES_TAB = 'trades'
 
 _GAIN_THRESHOLD = 0.05
 _LOSS_THRESHOLD = -0.05
@@ -477,6 +492,15 @@ def build_figure(run, stats=None):
             hovertemplate="pnl: %{customdata[0]:.2%}<br>held: %{customdata[1]:.0f}d"
                          "<extra></extra>"))
 
+    # Rings around the selected trade's entry and exit, filled in by the dashboard
+    # callback. A marker trace rather than pixel sized circle shapes: plotly scales
+    # the height of those with the zoom on a log axis.
+    fig.add_trace(go.Scatter(
+        x=[], y=[], yaxis='y2', mode='markers', name=_TRADE_HIGHLIGHT_NAME,
+        showlegend=False, hoverinfo='skip',
+        marker=dict(symbol='circle-open', size=_RING_SIZE, color=_HIGHLIGHT_COLOR,
+                   line=dict(width=2))))
+
     fig.update_layout(
         title=dict(text=figure_title(run, stats), font=dict(color='black')),
         yaxis=dict(title='Portfolio value ($)', type='log', side='left'),
@@ -540,10 +564,21 @@ def period_bounds(row_label, column_id):
     return start, start + pd.offsets.MonthEnd(1)
 
 
+# Dash paints its own pink background on the active cell, after the plain rules. A rule
+# whose condition is a cell state beats it, but only if it comes later in the list than
+# any other state rule, so the neutral rules come first and the selection colours last.
+_NEUTRAL_STATE_STYLE = [
+    {'if': {'state': 'active'}, 'backgroundColor': 'transparent', 'border': '1px solid #ddd'},
+    {'if': {'state': 'selected'}, 'backgroundColor': 'transparent', 'border': '1px solid #ddd'},
+]
+
+
 def returns_style(year_columns):
     """
-        The base conditional formatting of the returns table: gains above 5% green,
-        losses below -5% red.
+        The conditional formatting of the returns table: gains above 5% green, losses
+        below -5% red, and the clicked cell of a year column yellow. The clicked cell
+        is Dash's active cell, so it is styled by state and this list never changes
+        with the click; the Month label column stays unmarked.
     :param year_columns: the table's year column ids
     :return: list of style_data_conditional rules
     """
@@ -555,32 +590,163 @@ def returns_style(year_columns):
         style.append({'if': {'filter_query': f'{{{column}}} < {_LOSS_THRESHOLD}',
                              'column_id': str(column)},
                       'backgroundColor': 'lightcoral', 'color': 'black'})
+    style += _NEUTRAL_STATE_STYLE
+    for column in year_columns:
+        for state in ('active', 'selected'):
+            style.append({'if': {'state': state, 'column_id': str(column)},
+                          'backgroundColor': _SELECTED_CELL_FILL, 'color': 'black',
+                          'border': '1px solid #b8a800'})
     return style
 
 
-def highlight_for_cell(active_cell, rows, year_columns):
+def highlight_for_cell(active_cell, rows):
     """
         Decides what a click on the returns table does. Kept out of the Dash callback
         so that the click behaviour is testable without a browser.
     :param active_cell: the DataTable active_cell dict, or None
     :param rows: the table's data, as returned by table_records
-    :param year_columns: the table's year column ids
-    :return: (shapes, styles) - the chart shapes to install, empty to clear the
-             highlight, and the table's style_data_conditional with the clicked cell
-             marked
+    :return: the chart shapes to install, empty to clear the highlight
     """
-    styles = returns_style(year_columns)
     if not active_cell:
-        return [], styles
+        return []
 
-    row_index, column_id = active_cell['row'], active_cell['column_id']
+    column_id = active_cell['column_id']
     if column_id == _MONTH_COLUMN:
-        return [], styles
+        return []
 
-    styles = styles + [{'if': {'row_index': row_index, 'column_id': column_id},
-                        'backgroundColor': 'yellow', 'color': 'black'}]
-    bounds = period_bounds(rows[row_index][_MONTH_COLUMN], column_id)
-    return (highlight_shapes(*bounds) if bounds else []), styles
+    bounds = period_bounds(rows[active_cell['row']][_MONTH_COLUMN], column_id)
+    return highlight_shapes(*bounds) if bounds else []
+
+
+# ----------------------------------------------------------------------------------
+# Trades table -> highlight in the chart pane
+# ----------------------------------------------------------------------------------
+
+def exit_reason(memo):
+    """
+        What closed a trade, read from its memo, e.g.
+        "bought:13 shares;FTD / sold:-13 shares;TakeProfit_0.2".
+    :param memo: the trade's memo; anything but a string (NaN) is tolerated
+    :return: 'stop loss' for the risk management label 'sl', 'end of backtest' for a
+             position still open on the last day, otherwise the exit signal's name;
+             '' when the memo names no sale
+    """
+    if not isinstance(memo, str):
+        return ''
+    sale = memo.rpartition(' / ')[2]
+    if not sale.startswith('sold'):
+        return ''
+    if sale == 'sold-lastday':
+        return 'end of backtest'
+    label = sale.rpartition(';')[2] if ';' in sale else ''
+    return 'stop loss' if label in _RISK_MANAGEMENT_LABELS else label
+
+
+def trade_records(trades):
+    """
+        Renders the trades as rows of the Trades table.
+    :param trades: the DataFrame from load_trades
+    :return: list of dicts sorted by entry date, then by file order. 'id' numbers the
+             rows from 1 in that order and is what the table reports as the row_id of
+             a clicked cell, so it names the same trade however the table is sorted.
+             'ret' is computed from the prices: the stored pnl_pcnt is rounded to 0.01.
+    """
+    if trades.empty:
+        return []
+    ordered = trades.sort_values('entry_date', kind='stable')
+    return [{'id': i,
+             'entry_date': t.entry_date.strftime('%Y-%m-%d'),
+             'entry_price': float(t.entry_price),
+             'exit_date': t.exit_date.strftime('%Y-%m-%d'),
+             'exit_price': float(t.exit_price),
+             'reason': exit_reason(t.memo),
+             'pnl': float(t.pnl),
+             'ret': float(t.exit_price / t.entry_price - 1),
+             'hp': int(t.hp)}
+            for i, t in enumerate(ordered.itertuples(), start=1)]
+
+
+def trades_style(selected_id=None):
+    """
+        The conditional formatting of the Trades table: P&L and Return in green or red
+        text, and the whole row of the selected trade filled and outlined.
+    :param selected_id: the 'id' of the selected trade, or None
+    :return: list of style_data_conditional rules
+    """
+    style = []
+    for column in ('pnl', 'ret'):
+        style.append({'if': {'filter_query': f'{{{column}}} > 0', 'column_id': column},
+                      'color': _GAIN_TEXT})
+        style.append({'if': {'filter_query': f'{{{column}}} < 0', 'column_id': column},
+                      'color': _LOSS_TEXT})
+    style += _NEUTRAL_STATE_STYLE
+    if selected_id is not None:
+        style.append({'if': {'filter_query': f'{{id}} = {selected_id}'},
+                      'backgroundColor': _TRADE_ROW_FILL,
+                      'border': f'1px solid {_HIGHLIGHT_COLOR}'})
+    return style
+
+
+def highlight_for_trade(active_cell, trades_by_id):
+    """
+        Finds the trade a click on the Trades table selected. Goes by the row_id, not
+        by the row position, which only names a row of the current sort order.
+    :param active_cell: the DataTable active_cell dict, or None
+    :param trades_by_id: dict of the rows from trade_records, by their 'id'
+    :return: the trade's row, or None when nothing valid is selected
+    """
+    if not active_cell:
+        return None
+    return trades_by_id.get(active_cell.get('row_id'))
+
+
+def trade_shapes(trade):
+    """
+        The translucent band that spans a selected trade, from entry to exit.
+    :param trade: a row from trade_records
+    :return: list holding one plotly shape dict, referenced to the x axis and to paper
+             y so that it spans the full chart height, drawn below the traces
+    """
+    return [{'type': 'rect', 'xref': 'x', 'yref': 'paper',
+             'x0': trade['entry_date'], 'x1': trade['exit_date'], 'y0': 0, 'y1': 1,
+             'fillcolor': _TRADE_BAND_FILL, 'line': {'width': 0}, 'layer': 'below'}]
+
+
+def trade_rings(trade):
+    """
+        Where to draw the rings around a selected trade's entry and exit markers.
+    :param trade: a row from trade_records, or None
+    :return: (x, y) lists for the highlight trace, empty for no trade. The prices are
+             raw: the trace sits on the price axis.
+    """
+    if trade is None:
+        return [], []
+    return ([trade['entry_date'], trade['exit_date']],
+            [trade['entry_price'], trade['exit_price']])
+
+
+def highlight_for_selection(tab, returns_cell, returns_rows, trades_cell, trades_by_id):
+    """
+        Decides what the chart pane shows for the current selections. Each tab keeps its
+        own selection; the chart shows the one of the visible tab.
+    :param tab: the visible tab, _RETURNS_TAB or _TRADES_TAB. Any other value, e.g. a
+                tab yet to be added, marks nothing.
+    :param returns_cell: active_cell of the returns table, or None
+    :param returns_rows: the returns table's data
+    :param trades_cell: active_cell of the trades table, or None
+    :param trades_by_id: dict of the rows from trade_records, by their 'id'
+    :return: (shapes, ring_x, ring_y, trades_styles) - the chart shapes to install, the
+             points of the highlight trace and the trades table's style_data_conditional,
+             which marks the selected row whichever tab is visible
+    """
+    trade = highlight_for_trade(trades_cell, trades_by_id)
+    trades_styles = trades_style(trade['id'] if trade else None)
+    if tab == _RETURNS_TAB:
+        return highlight_for_cell(returns_cell, returns_rows), [], [], trades_styles
+    if tab == _TRADES_TAB and trade is not None:
+        ring_x, ring_y = trade_rings(trade)
+        return trade_shapes(trade), ring_x, ring_y, trades_styles
+    return [], [], [], trades_styles
 
 
 # ----------------------------------------------------------------------------------
@@ -598,14 +764,36 @@ def _stats_strip(stats):
            f"Max realized drawdown: {fmt(stats['max_dd_pcnt_realized'], '.1%')}")
 
 
-def build_layout(run, figure, pivot, stats):
+_TRADE_COLUMNS = [
+    {'name': '#', 'id': 'id', 'type': 'numeric', 'format': {'specifier': 'd'}},
+    {'name': 'Entry date', 'id': 'entry_date', 'type': 'text'},
+    {'name': 'Entry price', 'id': 'entry_price', 'type': 'numeric',
+     'format': {'specifier': ',.2f'}},
+    {'name': 'Exit date', 'id': 'exit_date', 'type': 'text'},
+    {'name': 'Exit price', 'id': 'exit_price', 'type': 'numeric',
+     'format': {'specifier': ',.2f'}},
+    {'name': 'Exit reason', 'id': 'reason', 'type': 'text'},
+    {'name': 'P&L ($)', 'id': 'pnl', 'type': 'numeric', 'format': {'specifier': ',.0f'}},
+    {'name': 'Return', 'id': 'ret', 'type': 'numeric', 'format': {'specifier': '.2%'}},
+    {'name': 'Days held', 'id': 'hp', 'type': 'numeric', 'format': {'specifier': 'd'}},
+]
+
+_TABLE_CELL_STYLE = {'textAlign': 'left', 'backgroundColor': 'white', 'color': 'black',
+                     'padding': '2px 6px', 'fontFamily': 'monospace', 'minWidth': '70px'}
+_TABLE_HEADER_STYLE = {'backgroundColor': 'rgb(30, 30, 30)', 'fontWeight': 'bold',
+                       'color': 'white'}
+
+
+def build_layout(run, figure, pivot, stats, trade_rows):
     """
         The dashboard page: the chart pane above, a one line strip of the supplementary
-        run metrics, and the monthly returns table below.
+        run metrics, and the data pane below, with the monthly returns table and the
+        trades table on two tabs.
     :param run: the Run
     :param figure: the go.Figure from build_figure
     :param pivot: the DataFrame from returns_pivot
     :param stats: the dict from key_statistics
+    :param trade_rows: the rows from trade_records
     :return: html.Div
     """
     year_columns = [c for c in pivot.columns if c != _MONTH_COLUMN]
@@ -613,51 +801,86 @@ def build_layout(run, figure, pivot, stats):
     columns += [{'name': c, 'id': c, 'type': 'numeric', 'format': {'specifier': '.2%'}}
                for c in year_columns]
 
+    returns_table = dash_table.DataTable(
+        id='returns-table',
+        columns=columns,
+        data=table_records(pivot),
+        style_cell=_TABLE_CELL_STYLE,
+        style_header=_TABLE_HEADER_STYLE,
+        style_table={'overflowX': 'auto', 'width': '100%', 'minWidth': '100%'},
+        fixed_columns={'headers': True, 'data': 1},
+        style_data_conditional=returns_style(year_columns))
+
+    # the table always exists: the callback below addresses it by id
+    trades_table = dash_table.DataTable(
+        id='trades-table',
+        columns=_TRADE_COLUMNS,
+        data=trade_rows,
+        sort_action='native',
+        sort_by=[{'column_id': 'entry_date', 'direction': 'asc'}],
+        page_action='none',
+        fixed_rows={'headers': True},
+        style_cell={**_TABLE_CELL_STYLE, 'minWidth': '90px', 'width': '90px',
+                    'maxWidth': '140px'},
+        style_header=_TABLE_HEADER_STYLE,
+        style_table={'maxHeight': '35vh', 'overflowY': 'auto'},
+        style_data_conditional=trades_style())
+    trades_content = ([trades_table] if trade_rows else
+                      [html.Div('No trades', style={'padding': '8px'}), trades_table])
+
+    tab_style = {'padding': '6px 14px'}
+    selected_tab_style = {**tab_style, 'fontWeight': 'bold',
+                          'borderTop': f'2px solid {_HIGHLIGHT_COLOR}'}
     return html.Div([
         dcc.Graph(id='main-chart', figure=figure, style={'height': '55vh'},
                  config={'scrollZoom': True, 'displaylogo': False,
                          'modeBarButtonsToRemove': ['lasso2d', 'select2d']}),
         html.Div(_stats_strip(stats), id='run-stats',
                 style={'padding': '6px 12px', 'color': '#444', 'fontSize': '13px'}),
-        dash_table.DataTable(
-            id='returns-table',
-            columns=columns,
-            data=table_records(pivot),
-            style_cell={'textAlign': 'left', 'backgroundColor': 'white', 'color': 'black',
-                       'padding': '2px 6px', 'fontFamily': 'monospace', 'minWidth': '70px'},
-            style_header={'backgroundColor': 'rgb(30, 30, 30)', 'fontWeight': 'bold',
-                         'color': 'white'},
-            style_table={'overflowX': 'auto', 'width': '100%', 'minWidth': '100%'},
-            fixed_columns={'headers': True, 'data': 1},
-            style_data_conditional=returns_style(year_columns)),
+        dcc.Tabs(id='data-tabs', value=_RETURNS_TAB, style={'height': '34px'}, children=[
+            dcc.Tab(label='Monthly Returns', value=_RETURNS_TAB, children=returns_table,
+                    style=tab_style, selected_style=selected_tab_style),
+            dcc.Tab(label=f'Trades ({len(trade_rows)})', value=_TRADES_TAB,
+                    children=trades_content, style=tab_style,
+                    selected_style=selected_tab_style),
+        ]),
     ], style={'fontFamily': 'sans-serif', 'margin': '10px'})
 
 
 def create_app(run):
     """
-        Builds the Dash application over one run and wires the returns table click to
-        the chart highlight. Does not start a server.
+        Builds the Dash application over one run and wires the selections in the data
+        pane to the chart highlight. Does not start a server.
     :param run: the Run
     :return: dash.Dash
     """
     stats = key_statistics(run)
     figure = build_figure(run, stats)
     pivot = returns_pivot(run.balance)
-    year_columns = [c for c in pivot.columns if c != _MONTH_COLUMN]
+    trade_rows = trade_records(run.trades)
+    trades_by_id = {row['id']: row for row in trade_rows}
+    ring_trace = next(i for i, t in enumerate(figure.data) if t.name == _TRADE_HIGHLIGHT_NAME)
 
     app = dash.Dash(__name__)
-    app.layout = build_layout(run, figure, pivot, stats)
+    app.layout = build_layout(run, figure, pivot, stats, trade_rows)
 
+    # One callback owns the chart's shapes and highlight trace, so neither the tab
+    # switch nor either table's selection has to fight another callback over them.
     @app.callback(
         Output('main-chart', 'figure'),
-        Output('returns-table', 'style_data_conditional'),
+        Output('trades-table', 'style_data_conditional'),
+        Input('data-tabs', 'value'),
         Input('returns-table', 'active_cell'),
+        Input('trades-table', 'active_cell'),
         State('returns-table', 'data'))
-    def _on_cell_click(active_cell, rows):
-        shapes, styles = highlight_for_cell(active_cell, rows, year_columns)
+    def _on_selection(tab, returns_cell, trades_cell, returns_rows):
+        shapes, ring_x, ring_y, trades_styles = highlight_for_selection(
+            tab, returns_cell, returns_rows, trades_cell, trades_by_id)
         patch = Patch()
         patch['layout']['shapes'] = shapes
-        return patch, styles
+        patch['data'][ring_trace]['x'] = ring_x
+        patch['data'][ring_trace]['y'] = ring_y
+        return patch, trades_styles
 
     return app
 

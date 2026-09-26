@@ -4,75 +4,45 @@
 Backfire is a quantitative stock investing strategy research engine aimed at quantitative and qualitative strategy behaviour understanding, optimization and development. 
 
 Purpose: 
-- verify claims made by popularizers of strategies for individual retail investors (e.g., Vibha Jha, Mark Minervini, Jim Roppel, IBD) by backtesting the strategies on historical data and analyzing their performance and risk/reward profiles 
+- verify claims made by popularizers of individual retail investor strategies (e.g., Vibha Jha, Mark Minervini, Jim Roppel, IBD) by backtesting the strategies on historical data and analyzing their performance and risk/reward profiles 
 - explore parameter value variations (e.g., different moving average periods) and behaviour variations (e.g., different exit criteria) and their impact on strategy reward and risk
-- find optimal parameter set for a strategy given an investor risk/reward profile
-- auto-research modifications to strategies to improve their suitability given a target (risk/reward profile), constraints (holding period, etc) and a budget (number of iterations)
+- find optimal parameter sets for strategies given an investor risk/reward profile
+- auto-research modifications to strategies to improve their suitability given a target (risk/reward profile), constraints (holding period, etc)
 
-Strategy behaviour is analyzed by executing deterministic simulations of strategies against historical and synthetic data and analyzing the generated quantitative metrics. Analysis of strategy results is performed by LLM-based agents following instructions as well as by visual inspection of the results. Auto research of strategy modifications will be performed by LLM-based agents to leverage the planning/reasoning and deep research capabilities of frontier LLM models. 
+Strategy behaviour is analyzed by executing deterministic simulations of strategies against historical and synthetic data and analyzing the generated quantitative metrics, trades and signals. 
 
-It supports:  
-- index and individual stock strategies operating on daily OHLC data
+Strategy result analysis and optimization is performed by LLM-based agents following instructions and double checked by visual inspection of the results. 
+
+Auto research of strategy modifications will be performed by LLM-based agents to leverage their planning/reasoning and deep research capabilities of frontier LLM models. 
+
+The goal of the research engine is answering questions such as: 
+- 'Make strategy using the FTD signal as entry point and TakeProfit at 25% as exit.': composes a strategy from existing library of signals. 
+- 'Run strategy ftd_takeprofit': simulate strategy with given parameters and determine the risk, return and individual trades the strategy would  generate over a trading period (quantitative metrics).
+- 'Analyze strategy ftd_takeprofit': understand the strategy behaviour: when/how did the strategy make money/lose money, did it have few/many winning trades vs. many/few losing trades, did it have one big win/loss driving the results, what was the average trade holding periods, how did it behave around market turning points, how long was it in drawdown, etc. 
+- 'Identify weaknesses of straetgy ftd_takeprofit': what are the weaknesses of a strategy, e.g. dependency on one big winning trade, sensitivity to slippage (trading at opening price), what risks are not mitigated in this strategy? 
+- 'Run ftd_takeprofit with several takeprofit parameters': would changing strategy parameters or rules result in a better or worse outcome? 
+- 'Optimize ftd_takeprofit. Use TQQQ 2000-20019 as training set, 2020-2016 as test set': what is the optimal set of parameters for a strategy? 
+- 'The target is 30% CAGR, constraints trading TQQQ on daily data with no more than 30% unrealized maximum drawdown. Suggest a strategy that fits these criteria.': how could this strategy be modified (parameters, rules of behaviour) to improve its performance?
+- '': how would a strategy behave on a synthetic/simulated market data scenario (terrorist attack, etc.)
+
+The research engine supports: 
+- index, ETF and individual stock strategies operating on daily OHLC data
+- strategies composed of entry signals, exit signals, risk management rules and position size rules
+- individual signal visualization and metrics
 - strategy performance simulation/backtest, behaviour visualization and qualitative performance metrics analysis
-- individual signal definition, visualization of signals behaviour and metrics
 - manual and automated strategy analysis, optimization and improvement  
+
+The engine does not support the following yet: 
+- shorting instruments
+- intraday trading
+- options trading
+- trading a portfolio of instruments
+- cryptocurrency trading
 
 ## Application Domain 
 
-The goal of the research engine is answering questions such as: 
-- what risk, return and individual trades would a strategy generate over a trading period (quantitative metrics)
-- understanding the strategy behaviour: when/how did the strategy make money/lose money, did it have few/many winning trades vs. many/few losing trades, did it have one big win/loss driving the results, what was the average trade holding periods, how did it behave around market turning points, how long was it in drawdown, etc. 
-- what are the weaknesses of a strategy, e.g. dependency on one big winning trade, sensitivity to slippage (trading at opening price)
-- what risks are not mitigated in this strategy? 
-- would changing strategy parameters or rules result in a better or worse outcome? 
-- what is the optimal set of parameters for a strategy? 
-- how could this strategy be modified (parameters, rules of behaviour) to improve its performance? 
-- how would a strategy behave on a synthetic/simulated market data scenario (terrorist attack, etc.)
-
-The basic building blocks of reasoning about a strategy (i.e., analysis, optimization and development) are experiment. An experiment often includes: 
-- descriptive experiment name (useful for later review of experiment outputs)
-- experiment definition which should include: 
-  - goals:  return exceeds market index CAGR over the same time period
-  - constraints: on parameters, rules or outcome (e.g., realized drawdown no more than 20%)
-  - validation: training (in-sample), validation and holdout (test) data
-  - instructions: e.g., optimize for plateaus (report median metric over parameter neighbourhood, heatmaps)
-- strategy definition and strategy parameters (needed in order to reproduce strategy backtests later)
-- experiment results: 
-  - number of trials
-  - metrics generated by trials - median value, confidence intervals
-- experiment conclusion: 
-  - conclusion based on analysis of experiment outcomes
-  - comparison to buy-and-hold benchmark
-  
-
-- experiment conclusion: 
-  - conclusion based on analysis of experiment outcomes
-  - comparison to buy-and-hold benchmark
-
-Examples of experiments: 
-
-1./ Did Vibha Jha's TQQQ strategy with default parameters on TQQQ return more than 50% CAGR from 2020 to 2026? 
-- name: "Vibha Jha TQQQ 2020-2026 backtest"
-- definition: underlying TQQQ, period 2020-2026, goal and constraints are not applicable
-- strategy: Vibha Jha TQQQ (in strategies/*) with standard FTD parameters and 21d MA for exit
-In this experiment, we check the claim Vibha Jha is making and also understand the behaviour of the strateegy. The agent would construct a definition of the strategy, download the market data, invoke the backtest tool, save the results and report the results.
-
-2./ Understand the behaviour of Vibha Jha's TQQQ strategy - what are its strengths, weaknesses, what risks are not mitigated by the strategy? 
-The analysis agent would use the results saved from the previous run to analyze the results using the strategy_analysis skill. Additionally, it would suggest the command to launch the visualization tool to further understand the strategy. 
-
-3./ Vary parameters of Vibha Jha's TQQQ strategy over defined intervals and find the parameter set with the highest Calmar ratio.
-Also vary SL, TP and TL parameters (including not using them). Use brute force for parameter space search. 
-- name:  "Vibha Jha TQQQ 2020-2026 best Calmar ratio"
-- definition: goal: maximum Calmar ratio (return to realized drawdown), constraints: exit MA period one of 10, 21, 50, 100 days.
-- strategy: Vibha Jha TQQQ (in strategies/*), standard FTD parameters, MA for exit varies as do SL, TP and TL parameters.  
-In this case, we search the parameter space for the best parameter set. The optimization agent would perform a set of simulation runs using the backtest local tool to search the parameter space by brute force (as instructed) and would select the parameter set with the highest Calmar ratio. The results of the search would be saved for later inspection with visualization tools. 
-
-3./ Improve the Vibha Jha's TQQQ strategy by modifying its parameters and rules as necessary within constraints. 
-- name: "Vibha Jha TQQQ strategy autoresearch"
-- experiment definition: underlying TQQQ, goal CAGR 20%+, constraints maxDD better than 20%, average holding period 2wk+, vary entry signals, exit signals
-- strategy: Vibha Jha TQQQ as the starting point 
-In this case, the autoresearch agent would iterate over strategy modifications until the target is reached. It might launch several optimization agents in parallel (each investigating a different branch) and use the analysis agent to determine the directions of research. 
-
+### Domain
+The research engine analyzes long-only trading strategies operating on stocks, stocks indexes and ETFs. The strategy decides its behaviour and executes trades based on market data. Market data is provided in the OHLCV format - open, high, low, close and volume. 
 
 ### What is a strategy
 We define a stock investing strategy as a set of rules for buying and selling an underlying stock market instrument(s).
@@ -84,20 +54,18 @@ The strategy logic simulates actions of a trader who:
 
 Note that buying/selling at the next day open may not not be possible which is a source of slippage in backtesting the strategy. 
 
-We focus on long-only strategies (so no shorting the underlying) and strategies making decisions based on end of the day prices (so no intraday trading). Also, no derivatives/options trading. 
-
-Underlying stock market instruments: 
+Examples of underlying stock market instruments: 
 - index/sector ETFs (e.g., SPY, TQQQ, SOXL)
 - individual stocks (e.g., MU, ANET)
 
-All underlyings will be denominated in US Dollars (USD). 
+All prices are denominated in US Dollars (USD). 
 
 Strategy rules: 
-- **general overlay rules**: indicates strategy is inactive (a.k.a 'in cash', 'out of the market') or active (i.e., has positions in the market). General overlay rules may be market related (market in downtrend, market choppy) or strategy related (cool-off period after a period of losing trades)
-- **selection rules**: what underlying should the strategy buy/sell. 
+- **general overlay rules**: decide when the strategy is inactive (a.k.a 'in cash', 'out of the market') or active (i.e., has positions in the market). General overlay rules may be market related (market in downtrend, market choppy). General overlay rules take precedence over buy/sell rules. 
+- **selection rules**: what underlying should the strategy buy/sell. Examples: trade TQQQ only, select top ticker based on relative strength and fundamental growth from a sector. 
 - **buy rules**: triggers that cause the strategy to buy the underlying. Examples: entry buy rule to establish the initial position in an underlying, add-on rule to add to a winning position (may be added in the future)
 - **sell rules**: triggers causing the strategy to sell the underlying. Examples of these are selling on predefined profit target (selling into strength while the underlying is still advancing), selling on a retracement (selling into weakness after the underlying has begun to decline) or sell rules based on other indicators. 
-- **risk management rules**: triggers protecting portfolio capital against trades that become losing trades even though the sell rule has not activated. Examples include initial stop loss set a predefined amount below the buy point. 
+- **risk management rules**: triggers protecting portfolio capital against. Examples include initial stop loss set a predefined amount below the buy point or cool-off period enforced after a period of losing trades. Risk management rules take precendence over buy/sell rules and general overlay rules.  
 - **position size rules**: determine how much of the underlying (e.g., the number of shares or total dollar position size) should the strategy buy or sell.  
 
 Here is an example of a strategy: 
@@ -107,18 +75,6 @@ Strategy "Index 50d/200d MA Crossover".
 - buy rules: when 50d moving average (MA) crosses above 200d MA from below, buy QQQ
 - sell rules: when 50d MA drops below 200d MA, sell QQQ
 - position size rules: always buy/sell as many shares as you can (so spend all portfolio cash) 
-
-Another example of a strategy: 
-Strategy "CANSLIM Market Leader Breakout, Single Run": 
-- general overlay: general market in uptrend 
-- selection rules: select most promising market leader breaking out from a consolidation
-- buy rules: move above the pivot point on volume
-- sell rules: 
-  - take profit rule (aka sell into strength): trade profit 25%+ and stock price 10%+ over the 21d MA
-  - retracement sell rule (aka sell on weakness): stock price closes below 21d MA
-- risk management rules: 
-  - initial stop loss: 7% below pivot point
-- position size rules: buy shares for 20% of the portfolio equity
 
 And yet another example: 
 Strategy "Vibha Jha TQQQ index strategy": 
@@ -133,63 +89,45 @@ Strategy "Vibha Jha TQQQ index strategy":
 - position size: 
   - buy TQQQ shares for 50% of the portfolio equity
 
+Another example of a strategy: 
+Strategy "CANSLIM Market Leader Breakout, Single Run": 
+- general overlay: general market in uptrend 
+- selection rules: select most promising market leader breaking out from a consolidation
+- buy rules: move above the pivot point on volume
+- sell rules: 
+  - take profit rule (aka sell into strength): trade profit 25%+ and stock price 10%+ over the 21d MA
+  - retracement sell rule (aka sell on weakness): stock price closes below 21d MA
+- risk management rules: 
+  - initial stop loss: 7% below pivot point
+- position size rules: buy shares for 20% of the portfolio equity
+
+  ### Strategy signals and rules
+
 To simplify reasoning about strategies and strategy analysis, it is useful to construct a strategy from signals.  
 
-Signals generate values (binary or continuous) at the end of every day. For binary signals, whenever the signal value goes from False to True (it triggers), we generate a signal id for that value and the same signal id is used as long as the signals stays on. When a new signal is generated (i.e., signal values goes to False and then to True again), the signal id is incremented. Some signals trigger only once (e.g., price crosses a MA to the upside), others stay on (price above a MA). 
+Signals generate values (binary or continuous) at the end of every day. For binary signals, whenever the signal value goes from False to True (we say it triggers or it fires), we generate a signal id for that 'firing' and the same signal id is used as long as the signals stays on. When a new signal is re-generated (i.e., signal values goes to False and then to True again), the signal id is incremented. Some signals trigger only for one day (e.g., price crosses a MA to the upside), others stay on (price above a MA). Examples of signals: ShortMAAboveLongMA, TakeProfitSignal. 
 
-A signal driven strategy is then composed of: 
-- **general market overlay signal**: signal usually calculated from general market averages (e.g., SPY or QQQ indexes) which indicates the level of exposure the strategy should be taking on. Strategies operating on indexes generally do not need a separate market overlay signal since the general market information will be reflected in the index signals and so will generally need no market overlay signal. 
-- **entry signal**: When this signal triggers, the strategy establishes position using the position management rule. The same signal will not be reentered - i.e., if a position was exited (based on SL, TP, TS or ExitSignal), the position will not be reentered until an entry signal with a different signal id is triggered. A new signal will also not be entered as long as the exit signal which caused it to be exited is in place. Note that entry signal going off (i.e., from True to False) does not mean exiting the position - only exit signal triggers position exit. Use negation of entry signal as exit signal if you need such behaviour. 
+A signal-driven strategy is then composed of: 
+- **general market overlay signal**: signal usually calculated from general market averages (e.g., SPY or QQQ indexes). It may be a binary signal (strategy is free to buy when the signal is on) or a continuous signal (which may indicate the level of exposure the strategy should be taking on). Strategies operating on indexes generally do not need a separate market overlay signal since the general market information will be reflected in the index signals and so will generally need no market overlay signal. 
+- **entry signal**: When this signal triggers, the strategy establishes position with size determined by the the position management rules. The same signal will not be reentered - i.e., if a position was exited (based on SL, TP, TS or ExitSignal), the position will not be reentered until an entry signal with a different signal id is triggered. A new signal will also not be entered as long as the exit signal which caused it to be exited is in place. Note that entry signal going off (i.e., from True to False) does not mean exiting the position - only exit signal triggers position exit. Use negation of entry signal as exit signal if you need such behaviour. 
 - **exit signal**: When this signal triggers, it takes precedence over the entry signal and full position is exited. When it goes off, the position may not be reentered on the same entry signal (strategy needs a new entry signal to put on a position) and may not be reentered as long as an exit signal is on. Common exit signals: 
   - take profit (TP): when in position and trade gain exceeds a threshold, close the position and do not act until a new entry signal is triggered
   - trailing stop (TS): when price falls back below a threshold (e.g., 21d MA or -10%), close the position and do not act until a new entry signal is triggered
   - exit signals calculated from the values of the underlying, e.g., price falls below a moving average.
 - **risk management rules**: 
   - initial stop loss rule (SL): when in position and trade loss exceeds a threshold, close the position and do not act until a new entry signal is triggered
+  - cool-off period (CP): after a sequence of losing trades
   **position size management rules**: 
     - Fixed Fraction: invest a percentage of the portfolio equity on entry, sell the entire positon on exit.  
     - Gradual Exposure (may be implemented in the future): as long as the same entry signal remains in place, the position size is increased as the underlying appreciates based on a predefined schedule, e.g. 10% initially, add 5% on 5% up and add 5% on 10% up. The position will NOT be decreased as the underlying drops (exit is triggered by SL, TP, TS or exit signal). 
 
 Examples of strategies in yaml format are in directory strategies. 
 
-### Market data 
-Market data is provided in the OHLCV format - open, high, low, close and volume. 
-
-### Strategy evaluation
-Strategy evaluation is the process of comparing strategy performance to its objectives and constraints and identifying any red flags: 
-
-Strategy Objectives: 
-  - total return over trading period
-  - CAGR (compounded annualized growth rate)
-  - Calmar ratio (CAGR / MaxDrawdown)
-  - Sharpe ratio
-
-Constraints: any of the following 
-- maximum drawdown (realized, unrealized) 
-- time in drawdown
-- number of trades or average trade holding period
-
-Red flags: 
-- many small losing trades offset by very few big winning trades (dependency on single/few big wins) 
-- very large maximum losing trade
-- too many trades, holding period too short
-- sensitivity to slippage (e.g., execution on opening price vs. execution on price on open+15min) 
-- sensitivity to small parameter changes (overfitting) 
-- presence of unmitigated risks
-- long periods of time spent in drawdown (emotional impact)
-
-Positive traits: 
-- can be leveraged
-
-Visual Inspection of strategy performance is also helpful. We chart the underlying over the trading period overlaid with: 
-- strategy actions (buys/sells) 
-- strategy unrealized PnL
-- signal values (entry, exit, general market)
+### Strategy simulation 
 
 
-### Simulating/backtesting strategy execution 
 
-The strategy simulation takes the following parameters: 
+Strategy simulation takes the following parameters: 
   - start date, end date
   - underlying (ticker)
   - strategy definition (yaml file with command line overrides)
@@ -254,51 +192,152 @@ Signal daily values - for each signal a file with one row for every day in the t
 
 All dates in YYYY-MM-DD. All stock prices reported with two decimal places. All Pnl/gain/loss numbers with zero decimal places and comma at thousands. All percentages with two decimal places, e.g. 0.77 or -0.33. 
 
-### Interactive strategy result visualization
+
+### Experiments
+
+An experiment is created whenever a simulation is needed to confirm or disprove a hypothesis. Experiments can contain one simulation run (e.g., analyzing a strategy with fixed set of parameters), several simulation runs (e.g, optimizing parameter sets given constraints) or a set of subexperiments (e.g., spawning several subagents to explore several research directions in autoresearch). Experiments are generated by tools like strategy simulator, analyzer, optimizer and researcher. 
+
+An experiment persists simulation results as well as all information necessary to reproduce the experiment later - descriptive experiment name, experiment definition, simulation runs performed within the experiment, experiment conclusions. For each simulation run, it stores strategy parameters, the underlying, start/end dates and results.
+
+An experiment includes: 
+- descriptive experiment name: either provided or generated from the experiment intent
+- experiment definition: 
+  - goals:  e.g., return exceeds market index CAGR over the same time period
+  - constraints: on parameters, rules or outcome (e.g., realized drawdown no more than 20%)
+  - validation: training (in-sample), validation and holdout (test) data
+  - resources: maximum number of iterations, length of time, models used, etc. 
+  - further instructions: e.g., optimize for plateaus (report median metric over parameter neighbourhood, heatmaps)
+- strategy definition and strategy parameters
+- experiment results: 
+  - number of trials
+  - metrics generated by trials - median values, confidence intervals, etc reported for training, validation and test datasets. 
+- experiment conclusion: 
+  - conclusion based on analysis of experiment outcomes
+  - comparison to benchmark (e.g., buy-and-hold strategy)
+  
+Examples of experiments: 
+
+1./ Did Vibha Jha's TQQQ strategy with default parameters on TQQQ return more than 50% CAGR from 2020 to 2026? 
+- name: "Vibha Jha TQQQ 2020-2026 backtest"
+- definition: underlying TQQQ, period 2020-2026, goal and constraints are not applicable
+- strategy: Vibha Jha TQQQ (in strategies/*) with standard FTD parameters and 21d MA for exit
+In this experiment, we check the claim Vibha Jha is making and also understand the behaviour of the strateegy. The agent would construct a definition of the strategy, download the market data, invoke the backtest tool, save the results and report the results.
+
+2./ Understand the behaviour of Vibha Jha's TQQQ strategy - what are its strengths, weaknesses, what risks are not mitigated by the strategy? 
+The analysis agent would use the results saved from the previous run to analyze the results using the strategy_analysis skill. Additionally, it would suggest the command to launch the visualization tool to further understand the strategy. 
+
+3./ Vary parameters of Vibha Jha's TQQQ strategy over defined intervals and find the parameter set with the highest Calmar ratio.
+Also vary SL, TP and TL parameters (including not using them). Use brute force for parameter space search. 
+- name:  "Vibha Jha TQQQ 2020-2026 best Calmar ratio"
+- definition: goal: maximum Calmar ratio (return to realized drawdown), constraints: exit MA period one of 10, 21, 50, 100 days.
+- strategy: Vibha Jha TQQQ (in strategies/*), standard FTD parameters, MA for exit varies as do SL, TP and TL parameters.  
+In this case, we search the parameter space for the best parameter set. The optimization agent would perform a set of simulation runs using the backtest local tool to search the parameter space by brute force (as instructed) and would select the parameter set with the highest Calmar ratio. The results of the search would be saved for later inspection with visualization tools. 
+
+3./ Improve the Vibha Jha's TQQQ strategy by modifying its parameters and rules as necessary within constraints. 
+- name: "Vibha Jha TQQQ strategy autoresearch"
+- experiment definition: underlying TQQQ, goal CAGR 20%+, constraints maxDD better than 20%, average holding period 2wk+, vary entry signals, exit signals
+- strategy: Vibha Jha TQQQ as the starting point 
+In this case, the autoresearch agent would iterate over strategy modifications until the target is reached. It might launch several optimization agents in parallel (each investigating a different branch) and use the analysis agent to determine the directions of research. 
+
+### Strategy evaluation
+Strategy evaluation is the process of comparing strategy performance to its objectives and constraints and analyzing its behaviour: 
+
+Strategy Objectives: 
+  - total return over trading period
+  - CAGR (compounded annualized growth rate)
+  - Calmar ratio (CAGR / MaxDrawdown)
+  - Sharpe ratio
+
+Constraints: any of the following 
+- maximum drawdown (typically unrealized) 
+- time in drawdown (in trading days)
+
+Trades placed by the strategy: 
+- number of trades
+- expected trade return, std deviation of returns, min/max return
+- average trade holding period
+
+
+Red flags: 
+- many small losing trades offset by very few big winning trades (dependency on single/few big wins) 
+- very large maximum losing trade
+- too many trades, holding period too short
+- sensitivity to slippage (e.g., execution on opening price vs. execution on price on open+15min) 
+- sensitivity to small parameter changes (overfitting) 
+- presence of unmitigated risks
+- long periods of time spent in drawdown (emotional impact)
+
+Positive traits: 
+- can be leveraged
+
+Visual Inspection of strategy performance is also helpful. We chart the underlying over the trading period overlaid with: 
+- strategy actions (buys/sells) 
+- strategy unrealized PnL
+- signal values (entry, exit, general market)
 
 Strategy result visualization tool uses data generated by the backtest/simulation framework and displays an interactive dashboard containing: 
 - Header: strategy name and backtest period; key statistics (total return, CAGR, three largest drawdowns) 
 - Chart Pane: timeseries chart showing underlying, entry and exit signals and the strategy unrealized PnL (portfolio value). It is possible to zoome in on a part of the chart. 
-- Data Pane: tabular display of monthly strategy returns and annual returns (along the bottom line). Clicking on a cell in thsi table highlights the beginning and end of the corresponding time period in the Chart Pane. 
-A snapshot of this dashboard is in docs/VisualizationDashboardScreenshot.PNG. 
+- Data Pane: this is a tabbed pane with two tabs - Monthly Returns and Trades. 
+  - The Monthly Returns tab holds a display of monthly strategy returns and annual returns (along the bottom line). Clicking on a cell in thsi table highlights the beginning and end of the corresponding time period in the Chart Pane. 
+  - The Trades tab lists trades in a sortable table. The table contains trade entry date and price, exit date, price and reason; and trade pnl. The table is initially sorted by entry dates. The exit reason is the exit signal's name, 'stop loss' or 'end of backtest'; the table also shows the trade number, return and days held. When a trade row is selected, the trade's entry and exit points are highlighted in the Chart Pane. 
 
-### Interactive signal behaviour visualization
-Signal behaviour visualization uses an interactive dashboard containing: 
-- Header: signal name, backtest period and key statistics (number of time signal turned on) 
-- Chart Pane: timeseries chart showing the underlying and signal values (on/off). 
-The layout will be consistent with the strategy result visualization Chart Pane. 
+### Strategy analysis
+To be done. 
+
+### Strategy optimization 
+To be done. 
+
+### Strategy research
+To be done. 
+
+
 
 
 
 
 ## Architecture and Design
 
-Primary components: 
-- **market data**: dataframe with columns OHLCV containing daily values for the underlying prices
-- **signal**: a subclass of Signal base class. Externally persisted as a yaml file with signal name and paramter values. Applying a signal to a set of market data generates daily signal values and signal ids. 
-- **strategy**: a subclass of SignalDrivenStrategy containing instances of entry/exit signals and risk management and positon rules. Externally persisted as a yaml file. Strategy simulation is done by calling method backtest which simulates the strategy on the specified underlying over the specified  trading period and generates a set of output dataframes: 
-- positions: daily values of signals, positions and other variables over the entire trading period
-- trades: list of trades generated by the strategy
-- results: evaluation metrics for the simulation run. 
-These may be saved to an output folder, in which case the strategy yaml file will be saved into that folder as well to allow for future reconstruction of the simulation run.
-- **BasicRiskManagement**: common risk management rules
-- **PositonManagement**: common position management rules 
-- **Evaluator**:  computes evaluation metrics.  
+### Market Data
+Market data is cached in folder md and downloaded as needed using tool tools/download_md.py. Each ticker is stored in a csv file containing OHLCV elements and loaded into a dataframe with columns OHLCV. 
 
-- Method Strategy.backtest encapsulates the entire process of a backtest run - load market data, generate signals, generate trades, evaluate statistics, save evaluation data to experiment output files and return evaluation data to the caller. 
+### Experiment
 
-- Jupyter notebooks consume the evaluation data generated by the Strategy.backtest method. 
+An experiment is created whenever a simulation is needed to confirm or disprove a hypothesis. Experiments can contain one simulation run (e.g., analyzing a strategy with fixed set of parameters), several simulation runs (e.g, optimizing parameter sets given constraints) or a set of subexperiments (e.g., spawning several subagents to explore several research directions in autoresearch). 
 
-- Plotly Dash dashboards consume the saved files generated by strategy backtest. 
+An experiment persists all information necessary to rerun the simulation later - descriptive experiment name, experiment definition, simulation runs performed within the experiment, experiment conclusions. For each simulation run, it stores strategy parameters, the underlying, start/end dates and results.  
 
-- AI agents use skills which encapsulate the load_ohlcv and the Strategy.backtest methods. 
+System components (simulator, visualizer, optimizers) communicate by using persisted experiment results. 
 
-- Optimization utilities use the load_ohlcv and Strategy.backtest methods. 
+### Strategies and signals 
+Signal definition templates are in strategies/signals stored as yaml files. 
+
+Strategy definition templates are in strategies. 
+
+Overrides to signal/strategy templates are provided via command line parameters provided to the simulator. 
+
+### Evaluator 
+Computes strategy run metrics. 
+
+### Simulator 
+Script backtest.py encapsulates the entire process of a single backtest run - load market data, load strategy, evaluate signals and generate trades, evaluate statistics, save evaluation data to experiment output files and return evaluation data to the caller. 
+
+### Visualizers
+Visualizers use simulation results to visualize results in static HTML pages, interactive dashboards or interactive jupyter notebooks. 
+
+### Analyzers 
+AI agents use skills to execute strategy analysis. 
+
+### Optimizer
+To be done. 
+
+### Researcher
+To be done. 
 
 
 ## CLI Workflows
 
-### Setup
+### Project Setup
 ```
 git clone https://github.com/JanKMarek/backfire.git
 uv sync                                    # create .venv and install everything (incl. dev group)
@@ -306,9 +345,9 @@ uv sync                                    # create .venv and install everything
 Run all commands from the repository root. 
 
 
-### Backtesting a strategy: 
+### Strategy simulation 
 
-Create a yaml strategy definition (see strategies directory for examples): 
+Create a yaml strategy definition (see strategies directory for strategy definition templates): 
 
 ```yaml
 strategy: 
@@ -331,7 +370,7 @@ strategy:
     fraction: 1.0      
 ```
 
-Run the backtest: 
+Run the simulation (backtest): 
 
 `uv run python backfire/backtest.py --start_date "2020-01-01" --end_date "2026-07-01" -md "md" --underlying QQQ --strategy strategies/ma_crossover.yaml --out "out/my_strategy"`
 
@@ -494,6 +533,7 @@ charts is a heavy page, so a chart is drawn only when it scrolls into view.
 
 ### Running visualization notebooks: 
 `uv run jupyter lab`
+Note these are not updated yet. 
 
 ### Run fast unit tests
 `uv run pytest test/unit -q`
