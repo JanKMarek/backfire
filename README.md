@@ -431,29 +431,6 @@ dotted from the root of the file and the value is read as YAML, so types are pre
 
 Command `uv run python backfire/visualize.py -out "out/test/Index_50dMAvs200dMA"` launches the web server; point browser at http://127.0.0.1:8050/ to view the dashboard. The dashboard reads the CSV files the backtest wrote into the `--out` folder; it does not re-run the backtest. `--host` and `--port` override the default `127.0.0.1:8050`, and `--debug` runs the Dash development server with the reloader and the in-browser error pane.
 
-### Visualizing an individual signal
-Visualize signal using visualize_signal.py. This module takes signal definition from a yaml file. If no signal definition file is provided, it collects signal definition from all command line arguments starting with 'signal.'. If a signal definition file is provided, any command line arguments starting with 'signal.' override the values in the signal definition file. 
-
-The module computes signal values using logic consistent with backtest.py. It generates signal value output files it will need for visualization into a temporary directory 'temp'. 
-
-
-Yaml file for the signal (see `docs/SIGNALS.md` for what the FTD parameters mean): 
-```yaml
-  signal:
-    name: FTDSignal
-    index: ^IXIC
-    min_decline: 0.08
-    min_peak_age_days: 20
-    day0_window: 5
-    ftd_min_gain: 0.0125
-    ftd_min_days: 4
-    ftd_max_days: 25
-```
-
-
-Run 
-`uv run python backfire/visualize_signal.py --signal my_signal.yaml --signal.name=FTDSignal --signal.ftd_min_gain=0.015 --signal.day0_window=10`
-
 ### FTD signal verification report
 
 `backfire/ftd_signal_verification_report.py` writes the verification report that `docs/SIGNALS.md`, "Signal
@@ -465,9 +442,26 @@ uv run python backfire/ftd_signal_verification_report.py --underlying QQQ --star
     --signal strategies/signals/ftd.yaml --ground_truth turnarounds --out out/ftd_verification
 ```
 
-It takes the same `--signal` file plus `--signal.*` override convention as `visualize_signal.py`,
-and the same signal catalog as `backtest.py`. With no `--signal` file the overrides define the
-signal on their own.
+The `--signal` file names the signal class and its constructor arguments, from the same signal
+catalog as `backtest.py` (see `docs/SIGNALS.md` for what the FTD parameters mean) -
+`strategies/signals/ftd.yaml`:
+
+```yaml
+signal:
+  name: FTDSignal
+  index: null # will use the underlying
+  min_decline: 0.08
+  min_peak_age_days: 20
+  day0_window: 5
+  ftd_min_gain: 0.0125
+  ftd_min_days: 4
+  ftd_max_days: 25
+```
+
+Any entry can be overridden per run with `--signal.<name>=<value>`, read as YAML so types are
+kept. With no `--signal` file the overrides define the signal on their own:
+
+`uv run python backfire/ftd_signal_verification_report.py ... --signal strategies/signals/ftd.yaml --signal.ftd_min_gain=0.015 --signal.day0_window=10`
 
 `--ground_truth` picks what the signal is verified against:
 

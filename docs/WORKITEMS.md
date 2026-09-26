@@ -1,13 +1,11 @@
 # Workitems
 
 ## Current
-- implement vibha jha's TQQQ strategy (essentially FTD-21d) 
-
 
 ## Open
+- analyze vibha jha's TQQQ strategy (essentially FTD-21d) 
 - interactive signal dashboard (#6). The chart annotations in `report_signal.panel_figure` are
   meant to be reused for it.
-- `backfire/visualize_signal.py` - the README documents it but it does not exist yet.
 - trade PnL histogram into the visualization tool (tab below)
 - implement claude skills encapsulating backtest
 - claude skill encapsulating strategy analysis
